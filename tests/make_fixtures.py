@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate test fixtures for manyue under tests/fixtures/books/:
+"""Generate test fixtures for kele under tests/fixtures/books/:
 
   漫画/测试漫画-大文件.pdf   >20MB manga-style PDF (noise pages)
   漫画/测试漫画-小.pdf       3-page text PDF
@@ -59,7 +59,7 @@ def make_small_pdf(path):
         c.setFont("Helvetica", 20)
         c.drawString(72, 750, "Small test PDF - page %d" % (i + 1))
         c.setFont("Helvetica", 12)
-        c.drawString(72, 720, "Hello from manyue test fixture.")
+        c.drawString(72, 720, "Hello from kele test fixture.")
         c.showPage()
     c.save()
     print("wrote %s (%d bytes)" % (path, os.path.getsize(path)))
@@ -100,7 +100,7 @@ def make_epub(path):
     <dc:title>测试小说：满月之下</dc:title>
     <dc:creator>测试作者</dc:creator>
     <dc:language>zh-CN</dc:language>
-    <dc:identifier id="BookID">urn:uuid:manyue-test-epub</dc:identifier>
+    <dc:identifier id="BookID">urn:uuid:kele-test-epub</dc:identifier>
     <meta name="cover" content="cover-img"/>
   </metadata>
   <manifest>
@@ -120,7 +120,7 @@ def make_epub(path):
 """)
     write("OEBPS/toc.ncx", """<?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
-  <head><meta name="dtb:uid" content="urn:uuid:manyue-test-epub"/></head>
+  <head><meta name="dtb:uid" content="urn:uuid:kele-test-epub"/></head>
   <docTitle><text>测试小说：满月之下</text></docTitle>
   <navMap>
     <navPoint id="n1" playOrder="1"><navLabel><text>封面</text></navLabel><content src="Text/cover.xhtml"/></navPoint>
