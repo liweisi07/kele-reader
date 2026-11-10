@@ -6,12 +6,14 @@ Uses tests/fixtures/books/ as the book folder and a temp data dir.
 """
 
 import base64
+import hashlib
 import io
 import json
 import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -305,8 +307,196 @@ class TestEpubHtml(unittest.TestCase):
             # No scripts survive, no external stylesheet links.
             self.assertNotIn("<script", text.lower())
             self.assertNotIn("<link", text.lower())
+            # Images lazy-load so a big book does not fetch them all.
+            self.assertIn('loading="lazy"', text)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_build_with_epub_prefix(self):
+        import zipfile
+        books = scan()
+        epub = [b for b in books if b["format"] == "epub"][0]
+        tmp = tempfile.mkdtemp(prefix="manyue-epub-")
+        try:
+            with zipfile.ZipFile(epub["_path"]) as zf:
+                zf.extractall(tmp)
+            out = os.path.join(tmp, "out.html")
+            appmod.build_epub_html(tmp, out, "deadbeef00000003",
+                                   url_prefix="/api/epub")
+            with open(out, "r", encoding="utf-8") as fh:
+                text = fh.read()
+            self.assertIn(
+                "/api/epub/deadbeef00000003/res/OEBPS/Images/cover.png",
+                text)
+            self.assertNotIn("/api/azw3/", text)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestEpub(unittest.TestCase):
+    def setUp(self):
+        self.books = scan()
+        self.epub = [b for b in self.books
+                     if b["format"] == "epub"][0]
+
+    def test_extract_real_epub(self):
+        meta = appmod.ensure_epub(self.epub)
+        self.assertEqual(meta["kind"], "epub")
+        self.assertEqual(meta["res_root"], "epub")
+        index = os.path.join(appmod.EPUB_DIR, self.epub["id"],
+                             "index.html")
+        self.assertTrue(os.path.isfile(index))
+        with open(index, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("第一章 月升", text)
+        self.assertIn("第二章 月落", text)
+        # Resources point at the EPUB endpoint, not AZW3.
+        self.assertIn("/api/epub/%s/res/OEBPS/Images/cover.png"
+                      % self.epub["id"], text)
+        self.assertNotIn("/api/azw3/", text)
+        self.assertIn('loading="lazy"', text)
+
+    def test_extract_is_cached(self):
+        first = appmod.ensure_epub(self.epub)
+        index = os.path.join(appmod.EPUB_DIR, self.epub["id"],
+                             "index.html")
+        mtime = os.path.getmtime(index)
+        second = appmod.ensure_epub(self.epub)
+        self.assertEqual(first, second)
+        self.assertEqual(mtime, os.path.getmtime(index))
+
+    def test_bad_file_rejected(self):
+        bad = os.path.join(DATA_DIR, "bad.epub")
+        with open(bad, "wb") as fh:
+            fh.write(b"X" * 200)
+        book = dict(self.epub)
+        book["_path"] = bad
+        book["id"] = "badbadbadbadbad3"
+        with self.assertRaises(RuntimeError) as ctx:
+            appmod.ensure_epub(book)
+        self.assertIn("打不开", str(ctx.exception))
+
+    def test_not_an_epub_rejected(self):
+        # A valid zip that is not an EPUB (no META-INF/container.xml).
+        bad = os.path.join(DATA_DIR, "notepub.epub")
+        import zipfile
+        with zipfile.ZipFile(bad, "w") as zf:
+            zf.writestr("hello.txt", "hello")
+        book = dict(self.epub)
+        book["_path"] = bad
+        book["id"] = "badbadbadbadbad4"
+        with self.assertRaises(RuntimeError) as ctx:
+            appmod.ensure_epub(book)
+        self.assertIn("不是有效的 EPUB", str(ctx.exception))
+
+
+class TestAuth(unittest.TestCase):
+    def setUp(self):
+        import copy
+        self._saved_config = copy.deepcopy(appmod._config)
+        self._saved_sessions = copy.deepcopy(appmod._sessions)
+        # 从干净状态开始：config 里没有 auth（像 load_config 没跑过），
+        # get_auth() 应回落到内存态默认 admin/admin。
+        with appmod._config_lock:
+            appmod._config.pop("auth", None)
+        with appmod._sessions_lock:
+            appmod._sessions.clear()
+
+    def tearDown(self):
+        import copy
+        with appmod._config_lock:
+            appmod._config.clear()
+            appmod._config.update(copy.deepcopy(self._saved_config))
+        with appmod._sessions_lock:
+            appmod._sessions.clear()
+            appmod._sessions.update(copy.deepcopy(self._saved_sessions))
+
+    def test_default_admin_login(self):
+        self.assertTrue(appmod.verify_login("admin", "admin"))
+
+    def test_wrong_password_rejected(self):
+        self.assertFalse(appmod.verify_login("admin", "wrong"))
+        self.assertFalse(appmod.verify_login("other", "admin"))
+        self.assertFalse(appmod.verify_login("admin", ""))
+        self.assertFalse(appmod.verify_login("", "admin"))
+        self.assertFalse(appmod.verify_login("admin", 123))
+
+    def test_password_hash_is_salted(self):
+        a1 = appmod._new_auth("admin", "secret")
+        a2 = appmod._new_auth("admin", "secret")
+        # 同一密码，两次盐不同、哈希不同；不存明文。
+        self.assertNotEqual(a1["salt"], a2["salt"])
+        self.assertNotEqual(a1["password_hash"], a2["password_hash"])
+        self.assertNotIn("secret", json.dumps(a1))
+        self.assertEqual(len(a1["password_hash"]), 64)  # sha256 hex
+        self.assertEqual(len(a1["salt"]), 32)  # 16 字节 hex
+        # 不是无盐 sha256（证明加了盐）。
+        self.assertNotEqual(
+            a1["password_hash"],
+            hashlib.sha256(b"secret").hexdigest())
+
+    def test_session_create_validate_destroy(self):
+        token = appmod.create_session("admin")
+        self.assertTrue(token)
+        self.assertEqual(appmod.validate_session(token), "admin")
+        self.assertIsNone(appmod.validate_session("bogus"))
+        self.assertIsNone(appmod.validate_session(""))
+        appmod.destroy_session(token)
+        self.assertIsNone(appmod.validate_session(token))
+
+    def test_session_expires(self):
+        token = appmod.create_session("admin")
+        with appmod._sessions_lock:
+            appmod._sessions[token]["expires"] = int(time.time()) - 1
+        self.assertIsNone(appmod.validate_session(token))
+        # 过期会话被清掉。
+        with appmod._sessions_lock:
+            self.assertNotIn(token, appmod._sessions)
+
+    def test_destroy_other_sessions_keeps_current(self):
+        t1 = appmod.create_session("admin")
+        t2 = appmod.create_session("admin")
+        appmod.destroy_other_sessions(t1)
+        self.assertEqual(appmod.validate_session(t1), "admin")
+        self.assertIsNone(appmod.validate_session(t2))
+
+    def test_load_config_seeds_default_auth(self):
+        # 模拟从旧版升级：config 只有 book_folder，没有 auth。
+        with open(appmod.CONFIG_PATH, "w", encoding="utf-8") as fh:
+            json.dump({"book_folder": FIXTURES}, fh)
+        with appmod._config_lock:
+            appmod._config.clear()
+            appmod._config["book_folder"] = ""
+        appmod.load_config()
+        auth = appmod._config.get("auth")
+        self.assertTrue(appmod._valid_auth(auth))
+        self.assertEqual(auth["username"], "admin")
+        self.assertTrue(appmod.verify_login("admin", "admin"))
+        self.assertEqual(appmod._config.get("book_folder"), FIXTURES)
+        # 已存盘，且是加盐哈希。
+        with open(appmod.CONFIG_PATH, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        self.assertTrue(appmod._valid_auth(saved.get("auth")))
+        self.assertNotEqual(
+            saved["auth"]["password_hash"],
+            hashlib.sha256(b"admin").hexdigest())
+
+    def test_change_password_preserves_config_and_progress(self):
+        # 改密码只动 auth 段：书库与进度必须原样保留。
+        with appmod._config_lock:
+            appmod._config["book_folder"] = FIXTURES
+        appmod.set_progress("f9be17429ddccce8", 12, 36)
+        appmod.set_auth("admin", "newpass123")
+        self.assertTrue(appmod.verify_login("admin", "newpass123"))
+        self.assertFalse(appmod.verify_login("admin", "admin"))
+        self.assertEqual(appmod._config.get("book_folder"), FIXTURES)
+        with open(appmod.PROGRESS_PATH, encoding="utf-8") as fh:
+            prog = json.load(fh)
+        self.assertEqual(prog["books"]["f9be17429ddccce8"]["loc"], 12)
+        with open(appmod.CONFIG_PATH, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        self.assertEqual(saved.get("book_folder"), FIXTURES)
+        self.assertNotIn("newpass123", json.dumps(saved))
 
 
 if __name__ == "__main__":
