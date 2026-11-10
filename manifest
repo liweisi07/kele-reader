@@ -1,0 +1,13 @@
+appname=manyue
+version=1.0.0
+display_name=满月阅读
+desc=私有云书架：把 NAS 上的 PDF、EPUB、TXT、AZW3 电子书和漫画集中管理，手机和电脑用浏览器在局域网内打开就能看，阅读进度自动同步到本机，不设文件大小限制。
+source=thirdparty
+platform=arm
+maintainer=manyue
+desktop_uidir=ui
+desktop_applaunchname=manyue.main
+service_port=18090
+checkport=true
+ctl_stop=true
+changelog=首版：PDF/EPUB/TXT/AZW3 书架与阅读，无文件大小限制，阅读进度同步，支持添加到手机主屏幕。
