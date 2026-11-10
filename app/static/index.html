@@ -13,6 +13,7 @@
   <h1>🌕 满月阅读</h1>
   <a class="linkbtn" href="#settings" id="settings-link">设置</a>
   <button id="rescan-btn" type="button">重新扫描</button>
+  <button id="logout-btn" type="button">退出登录</button>
 </header>
 
 <main class="page">
@@ -28,6 +29,11 @@
     <a class="go" id="continue-link" href="#">继续 ›</a>
   </div>
 
+  <div id="history-section" class="history hidden">
+    <h2>阅读历史</h2>
+    <div id="history-list"></div>
+  </div>
+
   <div id="setup-card" class="card hidden">
     <h2>设置书库文件夹</h2>
     <p>把漫画 / 电子书放到 NAS 上的一个文件夹里，填好路径后点保存；请在飞牛文件管理里给 manyue 账号该文件夹的读取权限。</p>
@@ -38,12 +44,31 @@
     <p class="muted" id="setup-status" style="margin: 10px 0 0;"></p>
   </div>
 
+  <div id="account-card" class="card hidden">
+    <h2>修改账号密码</h2>
+    <p>修改后立即生效；其它已登录的设备需要重新登录。书库文件夹和阅读进度不受影响。</p>
+    <div class="field">
+      <label for="cur-pass">当前密码</label>
+      <input type="password" id="cur-pass" autocomplete="current-password" placeholder="当前密码">
+    </div>
+    <div class="field">
+      <label for="new-user">新账号（不改请留空）</label>
+      <input type="text" id="new-user" autocomplete="off" placeholder="新账号，留空则不改">
+    </div>
+    <div class="field">
+      <label for="new-pass">新密码</label>
+      <input type="password" id="new-pass" autocomplete="new-password" placeholder="新密码">
+    </div>
+    <button class="btn" id="save-account-btn" type="button">保存账号密码</button>
+    <p class="muted" id="account-status" style="margin: 10px 0 0;"></p>
+  </div>
+
   <div class="searchbar">
     <input type="search" id="search-input" placeholder="搜索书名…" autocomplete="off">
   </div>
 
   <div id="book-count" class="muted" style="margin-bottom: 12px;"></div>
-  <div id="grid" class="grid"></div>
+  <div id="shelf"></div>
   <div id="empty" class="empty hidden">这里还没有书<br><span style="font-size:13px">先在设置里填好书库文件夹，再点“重新扫描”</span></div>
 </main>
 
