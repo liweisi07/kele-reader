@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build manyue-reader-<version>-arm64.fpk from this project directory.
+"""Build kele-reader-<version>-arm64.fpk from this project directory.
 
 Same container format as the cf-bestip apps (verified against fnpack
 output): a gzip tar whose members sit at the package root, with an
@@ -121,7 +121,7 @@ def collect_app_members():
 
 def main():
     manifest = parse_manifest(os.path.join(ROOT, "manifest"))
-    appname = manifest.get("appname", "manyue")
+    appname = manifest.get("appname", "kele")
     version = manifest.get("version", "1.0.0")
     print("appname=%s version=%s platform=%s"
           % (appname, version, manifest.get("platform")))
@@ -173,7 +173,7 @@ def main():
 
     out_dir = os.path.join(ROOT, "dist")
     os.makedirs(out_dir, exist_ok=True)
-    out_name = "manyue-reader-%s-arm64.fpk" % version
+    out_name = "kele-reader-%s-arm64.fpk" % version
     out_path = os.path.join(out_dir, out_name)
     fpk_bytes = build_tar(outer_members)
     with open(out_path, "wb") as fh:
