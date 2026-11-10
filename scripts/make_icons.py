@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate icons for manyue (pure stdlib, no PIL).
+"""Generate icons for kele (pure stdlib, no PIL).
 
 Icons are written as RGBA PNGs (color type 6): fnOS App Center rejects
 packages whose ICON files are not RGBA ("应用包不符合系统要求").
