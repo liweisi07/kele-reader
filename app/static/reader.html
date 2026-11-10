@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101828">
+<link rel="manifest" href="/manifest.json">
+<link rel="stylesheet" href="/static/style.css">
+<title>阅读 — 满月阅读</title>
+</head>
+<body class="reader-page" id="body">
+<header class="topbar">
+  <a class="back" href="/">‹ 书架</a>
+  <span class="title" id="book-title">加载中…</span>
+  <span class="badge" id="book-badge"></span>
+</header>
+
+<div id="error-box" class="error hidden" style="margin:12px 16px 0;"></div>
+
+<main class="viewer" id="viewer">
+  <div id="loading" style="text-align:center;color:#999;padding:60px 16px;">正在打开…</div>
+  <!-- PDF -->
+  <div id="pdf-viewer" class="pdf-pages hidden"></div>
+  <!-- EPUB -->
+  <div id="epub-viewer" class="epub-viewer hidden"></div>
+  <!-- TXT -->
+  <div id="txt-viewer" class="hidden">
+    <div class="page-slider hidden" id="txt-slider-wrap">
+      <input type="range" id="txt-slider" min="1" max="1" value="1" step="1" aria-label="翻页">
+    </div>
+    <div id="txt-content" class="txt-content"></div>
+  </div>
+  <!-- AZW3 -->
+  <iframe id="azw3-frame" class="hidden" title="AZW3 阅读器"></iframe>
+</main>
+
+<footer class="toolbar">
+  <button class="tb-btn" id="prev-btn" type="button">‹ 上一页</button>
+  <span class="pos" id="pos-label">—</span>
+  <button class="tb-btn" id="next-btn" type="button">下一页 ›</button>
+  <button class="tb-btn" id="font-minus" type="button" title="减小字号">A-</button>
+  <button class="tb-btn" id="font-plus" type="button" title="增大字号">A+</button>
+  <button class="tb-btn hidden" id="zoom-out" type="button" title="缩小">－</button>
+  <button class="tb-btn hidden" id="zoom-in" type="button" title="放大">＋</button>
+  <button class="tb-btn hidden" id="zoom-fit" type="button" title="适合宽度">适合宽度</button>
+</footer>
+
+<script src="/static/pdf.min.js"></script>
+<script src="/static/jszip.min.js"></script>
+<script src="/static/epub.min.js"></script>
+<script src="/static/reader.js"></script>
+</body>
+</html>
