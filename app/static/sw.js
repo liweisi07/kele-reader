@@ -1,8 +1,8 @@
 /* 满月阅读 — Service Worker */
-var CACHE_NAME = 'manyue-v1';
+var CACHE_NAME = 'manyue-v2';
+// 只预缓存公开静态资源；/ 与 /read 要登录，不预缓存（登录页
+// 不能缓存到 / 下面），页面一律走网络。
 var APP_SHELL = [
-  '/',
- '/read',
   '/static/style.css',
   '/static/shelf.js',
   '/static/reader.js',
@@ -68,18 +68,11 @@ self.addEventListener('fetch', function (event) {
     return;
   }
 
-  // 页面（/ 与 /read）：网络优先，离线时回退缓存
-  if (url.pathname === '/' || url.pathname === '/read') {
-    event.respondWith(
-      fetch(event.request).then(function (res) {
-        if (res && res.ok) {
-          var copy = res.clone();
-          caches.open(CACHE_NAME).then(function (cache) { cache.put(event.request, copy); }).catch(function () {});
-        }
-        return res;
-      }).catch(function () {
-        return caches.match(event.request);
-      })
-    );
+  // 页面（/、/read、/login）：只走网络，不缓存。未登录时 / 会 302
+  // 到 /login，跟随后的登录页绝不能缓存到 / 下面；已登录的书架壳
+  // 缓存了也会在退出后被离线读到，干脆不缓存页面。
+  if (url.pathname === '/' || url.pathname === '/read' ||
+      url.pathname === '/login') {
+    event.respondWith(fetch(event.request));
   }
 });
