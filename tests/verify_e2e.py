@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end verification for manyue: start the real server as a
+"""End-to-end verification for kele: start the real server as a
 subprocess and exercise every endpoint with real HTTP requests.
 
 Run: python3 tests/verify_e2e.py
@@ -21,11 +21,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURES = os.path.join(ROOT, "tests", "fixtures", "books")
 PORT = 18099
 BASE = "http://127.0.0.1:%d" % PORT
-DATA_DIR = "/tmp/manyue-e2e-data"
+DATA_DIR = "/tmp/kele-e2e-data"
 
 CHECKS = []
 
-COOKIE = None  # "manyue_session=<token>"，当前阶段登录后的会话
+COOKIE = None  # "kele_session=<token>"，当前阶段登录后的会话
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -70,11 +70,11 @@ def login(base=BASE, username="admin", password="admin"):
     token = None
     for part in set_cookie.split(";"):
         part = part.strip()
-        if part.startswith("manyue_session="):
-            token = part[len("manyue_session="):]
+        if part.startswith("kele_session="):
+            token = part[len("kele_session="):]
             break
     if status == 200 and token:
-        COOKIE = "manyue_session=" + token
+        COOKIE = "kele_session=" + token
     return status, data
 
 
@@ -102,8 +102,8 @@ def start_server(wipe=True):
                   encoding="utf-8") as fh:
             json.dump({"book_folder": FIXTURES}, fh)
     env = dict(os.environ)
-    env["MANYUE_DATA_DIR"] = DATA_DIR
-    env["MANYUE_PORT"] = str(PORT)
+    env["KELE_DATA_DIR"] = DATA_DIR
+    env["KELE_PORT"] = str(PORT)
     proc = subprocess.Popen(
         [sys.executable, os.path.join(ROOT, "app", "app.py")],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -186,25 +186,25 @@ def run_checks(proc):
     # -- pages ---------------------------------------------------------
     status, _h, data = http("/")
     check("GET / bookshelf 200", status == 200
-          and "满月阅读".encode("utf-8") in data, "(%d)" % status)
+          and "可乐阅读".encode("utf-8") in data, "(%d)" % status)
     status, _h, data = http("/read")
     check("GET /read reader 200", status == 200
           and "book-title".encode("utf-8") in data, "(%d)" % status)
     status, _h, data = http("/api/version")
     check("GET /api/version", status == 200
-          and json.loads(data).get("version") == "1.0.1",
+          and json.loads(data).get("version") == "1.0.2",
           "(%d)" % status)
 
     # -- PWA -----------------------------------------------------------
     status, _h, data = http("/manifest.json")
     manifest = json.loads(data) if status == 200 else {}
     check("GET /manifest.json valid PWA manifest",
-          status == 200 and manifest.get("name") == "满月阅读"
+          status == 200 and manifest.get("name") == "可乐阅读"
           and manifest.get("display") == "standalone"
           and len(manifest.get("icons", [])) == 2, "(%d)" % status)
     status, _h, data = http("/sw.js")
     check("GET /sw.js service worker", status == 200
-          and b"manyue-v2" in data, "(%d)" % status)
+          and b"kele-v1" in data, "(%d)" % status)
     for icon in ("icon-192.png", "icon-512.png"):
         status, _h, data = http("/icons/" + icon)
         check("GET /icons/%s" % icon, status == 200
@@ -342,7 +342,7 @@ def run_checks_after_restart(proc, big_pdf, epub, txt, azw3):
           "(%s)" % data)
     status, _h, data = http_json(
         "/api/settings", method="POST",
-        body={"book_folder": "/nonexistent/manyue"})
+        body={"book_folder": "/nonexistent/kele"})
     check("POST settings bad path -> 400, not saved",
           status == 400, "(%d)" % status)
     status, _h, data = http_json("/api/settings")
@@ -496,8 +496,8 @@ def run_auth_flow_checks(big_pdf):
 
 LARGE_PORT = 18097
 LARGE_BASE = "http://127.0.0.1:%d" % LARGE_PORT
-LARGE_DATA = "/tmp/manyue-e2e-large-data"
-LARGE_BOOKS = "/tmp/manyue-e2e-large-books"
+LARGE_DATA = "/tmp/kele-e2e-large-data"
+LARGE_BOOKS = "/tmp/kele-e2e-large-books"
 
 
 def make_large_epub(path, chapters=60):
@@ -558,7 +558,7 @@ def make_large_epub(path, chapters=60):
     <dc:title>大开本测试（共%d话）</dc:title>
     <dc:creator>测试</dc:creator>
     <dc:language>zh-CN</dc:language>
-    <dc:identifier id="BookID">urn:uuid:manyue-test-large-epub</dc:identifier>
+    <dc:identifier id="BookID">urn:uuid:kele-test-large-epub</dc:identifier>
   </metadata>
   <manifest>
     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
@@ -572,7 +572,7 @@ def make_large_epub(path, chapters=60):
        "\n    ".join(spine_items)))
     write("OEBPS/toc.ncx", """<?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
-  <head><meta name="dtb:uid" content="urn:uuid:manyue-test-large-epub"/></head>
+  <head><meta name="dtb:uid" content="urn:uuid:kele-test-large-epub"/></head>
   <docTitle><text>大开本测试</text></docTitle>
   <navMap></navMap>
 </ncx>
@@ -611,8 +611,8 @@ def run_large_epub_phase():
               encoding="utf-8") as fh:
         json.dump({"book_folder": LARGE_BOOKS}, fh)
     env = dict(os.environ)
-    env["MANYUE_DATA_DIR"] = LARGE_DATA
-    env["MANYUE_PORT"] = str(LARGE_PORT)
+    env["KELE_DATA_DIR"] = LARGE_DATA
+    env["KELE_PORT"] = str(LARGE_PORT)
     proc = subprocess.Popen(
         [sys.executable, os.path.join(ROOT, "app", "app.py")],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
