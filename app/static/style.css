@@ -82,6 +82,35 @@ img { display: block; max-width: 100%; }
 .book .meta .t { font-size: 14px; font-weight: 600; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .book .meta .sub { font-size: 12px; color: #888; margin-top: 4px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .book .meta .folder { font-size: 12px; color: #999; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.book .meta .prog { height: 4px; background: #e3ddcf; border-radius: 2px; margin-top: 8px; overflow: hidden; }
+.book .meta .prog-fill { height: 100%; background: #101828; border-radius: 2px; }
+.book .meta .prog-text { font-size: 12px; color: #666; margin-top: 4px; }
+
+/* ---------- 文件夹分组 ---------- */
+.folder-group { margin-bottom: 20px; }
+.folder-group summary {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 16px; font-weight: 600; cursor: pointer;
+  padding: 6px 2px; list-style: none;
+}
+.folder-group summary::-webkit-details-marker { display: none; }
+.folder-group summary::before { content: '▾'; color: #999; font-size: 13px; }
+.folder-group:not([open]) summary::before { content: '▸'; }
+.folder-group .folder-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder-group .folder-count { font-size: 13px; color: #888; font-weight: 400; white-space: nowrap; }
+.folder-group .grid { margin-top: 10px; }
+
+/* ---------- 阅读历史 ---------- */
+.history { background: #fff; border: 1px solid #e3ddcf; border-radius: 12px; padding: 12px 14px; margin-bottom: 16px; }
+.history h2 { font-size: 15px; margin: 0 0 8px; }
+.history-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 2px; border-top: 1px solid #f0ece2; min-height: 44px;
+}
+.history-item:first-of-type { border-top: none; }
+.history-item .history-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history-item .history-pos { font-size: 12px; color: #666; white-space: nowrap; }
+.history-item .history-time { font-size: 12px; color: #999; white-space: nowrap; }
 
 /* ---------- 设置卡片 / 空态 / 提示 ---------- */
 .card {
@@ -90,11 +119,14 @@ img { display: block; max-width: 100%; }
 .card h2 { font-size: 16px; margin: 0 0 8px; }
 .card p { font-size: 14px; color: #555; margin: 0 0 12px; }
 .card .row { display: flex; gap: 8px; }
-.card input[type="text"] {
+.card input[type="text"], .card input[type="password"] {
   flex: 1; min-width: 0; min-height: 44px; padding: 10px 12px; font-size: 15px;
   border: 1px solid #d8d2c4; border-radius: 8px; outline: none;
 }
-.card input[type="text"]:focus { border-color: #101828; }
+.card input[type="text"]:focus, .card input[type="password"]:focus { border-color: #101828; }
+.card .field { margin-bottom: 12px; }
+.card .field label { display: block; font-size: 14px; color: #555; margin-bottom: 4px; }
+.card .field input { width: 100%; }
 .btn {
   min-height: 44px; padding: 10px 18px; font-size: 15px; border: none; border-radius: 8px;
   background: #101828; color: #fff;
@@ -125,8 +157,6 @@ img { display: block; max-width: 100%; }
 .pdf-page { position: relative; margin: 0 auto 12px; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.4); }
 .pdf-page canvas { display: block; width: 100%; height: auto; }
 .pdf-page .ph { display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px; min-height: 200px; }
-.epub-viewer { position: absolute; inset: 0; overflow: hidden; }
-.epub-viewer iframe { background: #f7f3ea; }
 
 /* ---------- 底部工具栏 ---------- */
 .toolbar {
