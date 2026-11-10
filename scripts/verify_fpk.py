@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify a built manyue-reader .fpk against the documented fnOS format.
+"""Verify a built kele-reader .fpk against the documented fnOS format.
 
 Checks (each printed PASS/FAIL):
   1. Outer gzip-tar members are package-root entries, no top-level dir.
@@ -63,9 +63,9 @@ def main():
     names = [m.name for m in members]
     all_ok &= check(
         "outer members at package root (no top-level dir)",
-        all("/" not in n or not n.startswith("manyue")
+        all("/" not in n or not n.startswith("kele")
             for n in names) and not any(
-                n.startswith("manyue-reader-") for n in names),
+                n.startswith("kele-reader-") for n in names),
         "(%d members)" % len(names),
     )
     all_ok &= check(
@@ -97,7 +97,7 @@ def main():
         "manifest fields",
         manifest.get("platform") == "arm"
         and manifest.get("service_port") == "18090"
-        and manifest.get("appname") == "manyue"
+        and manifest.get("appname") == "kele"
         and manifest.get("source") == "thirdparty",
         str(manifest),
     )
