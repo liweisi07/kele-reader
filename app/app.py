@@ -7,7 +7,9 @@
 不会把整个文件读进内存。
 
   * PDF：浏览器端 PDF.js 渲染，竖向连续滚动、按需渲染页面。
-  * EPUB：浏览器端 epub.js 渲染。
+  * EPUB：服务端解包成一页可滚动的 HTML（与 AZW3 同一套路），
+    浏览器只拉当前看的部分；99 MB 的大 EPUB 也不用先下载整本，
+    打开即看。图片懒加载。
   * TXT：按 Range 分块拉取，客户端分页。
   * AZW3：服务端用 vendored 的 `mobi` 包（KindleUnpack 的 fork，
     GPL-3.0，见 app/vendor/mobi-LICENSE）解包成 EPUB/HTML，再拼
@@ -16,6 +18,9 @@
   * 阅读进度存在本机 data/progress.json，换设备打开同一本书
     也能接着看；封面：EPUB 用内嵌封面，PDF 由浏览器渲染第 1 页
     后回传缓存，其余用标题色块。
+  * 账号密码：默认 admin/admin，首次运行即写入加盐哈希；
+    设置页可改账号密码，登录后用 HttpOnly 会话 cookie 保持
+    30 天，未登录打不开任何页面与接口。
   * PWA：manifest + service worker，手机浏览器“添加到主屏幕”
     后可全屏打开，像原生应用一样。
 
@@ -24,12 +29,14 @@
 """
 
 import hashlib
+import hmac
 import html
 import io
 import json
 import os
 import posixpath
 import re
+import secrets
 import shutil
 import sys
 import threading
@@ -47,9 +54,13 @@ STATIC_DIR = os.path.join(APP_DIR, "static")
 sys.path.insert(0, VENDOR_DIR)
 sys.path.insert(0, APP_DIR)
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 APPNAME = "manyue"
 DEFAULT_PORT = 18090
+SESSION_COOKIE = "manyue_session"
+SESSION_TTL = 30 * 24 * 3600  # 会话有效期 30 天
+DEFAULT_USERNAME = "admin"
+DEFAULT_PASSWORD = "admin"
 BOOK_EXTS = {".pdf": "pdf", ".epub": "epub", ".txt": "txt", ".azw3": "azw3"}
 CONTENT_TYPES = {
     "pdf": "application/pdf",
@@ -77,8 +88,11 @@ def resolve_data_dir():
 DATA_DIR = resolve_data_dir()
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 PROGRESS_PATH = os.path.join(DATA_DIR, "progress.json")
+SESSIONS_PATH = os.path.join(DATA_DIR, "sessions.json")
 COVERS_DIR = os.path.join(DATA_DIR, "covers")
 AZW3_DIR = os.path.join(DATA_DIR, "azw3")
+EPUB_DIR = os.path.join(DATA_DIR, "epub")
+EPUB_DIR = os.path.join(DATA_DIR, "epub")
 
 
 def resolve_port():
@@ -119,10 +133,13 @@ def load_config():
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        if isinstance(data, dict) and isinstance(
-                data.get("book_folder"), str):
-            with _config_lock:
-                _config["book_folder"] = data["book_folder"].strip()
+        if isinstance(data, dict):
+            if isinstance(data.get("book_folder"), str):
+                with _config_lock:
+                    _config["book_folder"] = data["book_folder"].strip()
+            if _valid_auth(data.get("auth")):
+                with _config_lock:
+                    _config["auth"] = data["auth"]
     except (OSError, ValueError):
         pass
     if not existed and not _config.get("book_folder"):
@@ -132,6 +149,8 @@ def load_config():
             with _config_lock:
                 _config["book_folder"] = folder
             save_config()
+    # 首启或从旧版（无 auth 段）升级：建默认 admin/admin 并存盘。
+    _ensure_auth()
 
 
 def save_config():
@@ -176,6 +195,141 @@ def set_progress(book_id, loc, total):
             "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
     save_progress()
+
+
+# --------------------------------------------------------------------------
+# 账号密码（加盐哈希存 config.json；会话 token 存 sessions.json）
+# --------------------------------------------------------------------------
+
+_sessions_lock = threading.Lock()
+_sessions = {}  # token -> {"username": str, "expires": int}
+
+
+def _hash_password(password, salt):
+    return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+
+def _new_auth(username, password):
+    salt = secrets.token_hex(16)
+    return {"username": username, "salt": salt,
+            "password_hash": _hash_password(password, salt)}
+
+
+def _valid_auth(auth):
+    return (isinstance(auth, dict)
+            and isinstance(auth.get("username"), str)
+            and bool(auth["username"])
+            and isinstance(auth.get("salt"), str)
+            and bool(auth["salt"])
+            and isinstance(auth.get("password_hash"), str)
+            and bool(auth["password_hash"]))
+
+
+def get_auth():
+    """当前账号配置；未配置时返回默认 admin/admin（内存态）。"""
+    with _config_lock:
+        auth = _config.get("auth")
+    if _valid_auth(auth):
+        return auth
+    return _new_auth(DEFAULT_USERNAME, DEFAULT_PASSWORD)
+
+
+def _ensure_auth():
+    """保证 _config 里有一份有效的账号配置，不足则建默认并存盘。"""
+    with _config_lock:
+        dirty = not _valid_auth(_config.get("auth"))
+        if dirty:
+            _config["auth"] = _new_auth(DEFAULT_USERNAME, DEFAULT_PASSWORD)
+    if dirty:
+        save_config()
+
+
+def verify_login(username, password):
+    """比对账号与密码（哈希比对，防时序攻击）。"""
+    if not isinstance(username, str) or not isinstance(password, str):
+        return False
+    auth = get_auth()
+    if username != auth["username"]:
+        return False
+    expect = _hash_password(password, auth["salt"])
+    return hmac.compare_digest(expect, auth["password_hash"])
+
+
+def set_auth(username, password):
+    """改账号密码：只动 config 的 auth 段，书库与进度不受影响。"""
+    with _config_lock:
+        _config["auth"] = _new_auth(username, password)
+    save_config()
+
+
+def load_sessions():
+    global _sessions
+    try:
+        with open(SESSIONS_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            now = int(time.time())
+            with _sessions_lock:
+                _sessions = {t: v for t, v in data.items()
+                             if isinstance(v, dict)
+                             and isinstance(v.get("expires"), int)
+                             and v["expires"] > now
+                             and isinstance(v.get("username"), str)}
+    except (OSError, ValueError):
+        pass
+
+
+def save_sessions():
+    with _sessions_lock:
+        payload = json.dumps(_sessions, ensure_ascii=False, indent=2)
+    _atomic_write(SESSIONS_PATH, payload.encode("utf-8"))
+
+
+def create_session(username):
+    token = secrets.token_hex(32)
+    with _sessions_lock:
+        _sessions[token] = {"username": username,
+                            "expires": int(time.time()) + SESSION_TTL}
+    save_sessions()
+    return token
+
+
+def validate_session(token):
+    """有效返回账号名；无效或过期返回 None（过期顺手清掉）。"""
+    if not token:
+        return None
+    expired = False
+    with _sessions_lock:
+        sess = _sessions.get(token)
+        if not sess:
+            return None
+        if sess.get("expires", 0) <= int(time.time()):
+            del _sessions[token]
+            expired = True
+        else:
+            return sess.get("username")
+    if expired:
+        save_sessions()
+    return None
+
+
+def destroy_session(token):
+    if not token:
+        return
+    with _sessions_lock:
+        gone = _sessions.pop(token, None) is not None
+    if gone:
+        save_sessions()
+
+
+def destroy_other_sessions(keep_token):
+    """改密码后只保留当前会话，其它设备/浏览器要重新登录。"""
+    with _sessions_lock:
+        others = [t for t in _sessions if t != keep_token]
+        for t in others:
+            del _sessions[t]
+    if others:
+        save_sessions()
 
 
 # --------------------------------------------------------------------------
@@ -499,18 +653,22 @@ def send_file_range(handler, path, content_type):
             remaining -= len(chunk)
 
 
-def send_bytes(handler, data, content_type, status=200):
+def send_bytes(handler, data, content_type, status=200,
+               extra_headers=None):
     handler.send_response(status)
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(len(data)))
+    for key, value in (extra_headers or []):
+        handler.send_header(key, value)
     handler.end_headers()
     if handler.command != "HEAD":
         handler.wfile.write(data)
 
 
-def send_json(handler, obj, status=200):
+def send_json(handler, obj, status=200, extra_headers=None):
     data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-    send_bytes(handler, data, "application/json; charset=utf-8", status)
+    send_bytes(handler, data, "application/json; charset=utf-8",
+               status, extra_headers)
 
 
 def send_text(handler, text, content_type="text/html; charset=utf-8",
@@ -525,6 +683,7 @@ def send_text(handler, text, content_type="text/html; charset=utf-8",
 # --------------------------------------------------------------------------
 
 _azw3_lock = threading.Lock()
+_epub_lock = threading.Lock()
 
 RES_TYPES = {
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
@@ -579,18 +738,22 @@ def _resolve_ref(base_dir, ref):
     return joined
 
 
-def _res_url(book_id, in_book_path):
-    return "/api/azw3/%s/res/%s" % (
-        book_id, urllib.parse.quote(in_book_path))
+def _res_url(book_id, in_book_path, url_prefix="/api/azw3"):
+    return "%s/%s/res/%s" % (
+        url_prefix, book_id, urllib.parse.quote(in_book_path))
 
 
-def _rewrite_refs(text, base_dir, book_id, chapter_map=None):
+def _rewrite_refs(text, base_dir, book_id, chapter_map=None,
+                  url_prefix="/api/azw3"):
     """Rewrite src/href/xlink:href/url(...) in a chapter to res/ URLs.
 
     Internal links to another spine chapter become in-page anchors
     (``#manyue-ch-<itemid>`` or the original ``#fragment``), so the
     concatenated page stays in one piece instead of navigating the
     reader away to a raw chapter file.
+
+    ``url_prefix`` is the res/ API root: "/api/azw3" for the AZW3
+    path, "/api/epub" for the server-side EPUB path.
     """
     chapter_map = chapter_map or {}
 
@@ -613,7 +776,7 @@ def _rewrite_refs(text, base_dir, book_id, chapter_map=None):
             anchor = ("#" + frag) if frag else (
                 "#" + chapter_map[target])
             return "%s%s%s%s" % (prefix, quote, anchor, quote)
-        url = _res_url(book_id, target)
+        url = _res_url(book_id, target, url_prefix)
         if frag:
             url += "#" + frag
         return "%s%s%s%s" % (prefix, quote, url, quote)
@@ -624,7 +787,7 @@ def _rewrite_refs(text, base_dir, book_id, chapter_map=None):
         if target is None:
             return match.group(0)
         return "url(%s%s%s)" % (
-            quote, _res_url(book_id, target), quote)
+            quote, _res_url(book_id, target, url_prefix), quote)
 
     text = _SCRIPT_RE.sub("", text)
     text = _LINK_RE.sub("", text)
@@ -659,8 +822,14 @@ def _opf_info(epub_dir):
     return posixpath.dirname(opf_rel), manifest, spine, title
 
 
-def build_epub_html(epub_dir, out_path, book_id):
-    """Concatenate an unzipped EPUB's spine into one HTML page."""
+def build_epub_html(epub_dir, out_path, book_id, url_prefix="/api/azw3"):
+    """Concatenate an unzipped EPUB's spine into one HTML page.
+
+    ``url_prefix`` is the res/ API root ("/api/azw3" for the AZW3
+    path, "/api/epub" for the server-side EPUB path). Images get
+    loading="lazy" so a big book does not fetch every picture up
+    front — the browser only pulls what is scrolled into view.
+    """
     opf_dir, manifest, spine, title = _opf_info(epub_dir)
     css_parts = []
     for _item_id, (href, mtype) in manifest.items():
@@ -675,7 +844,8 @@ def build_epub_html(epub_dir, out_path, book_id):
         except OSError:
             continue
         css_dir = posixpath.dirname(css_rel)
-        css_text = _rewrite_refs(css_text, css_dir, book_id)
+        css_text = _rewrite_refs(css_text, css_dir, book_id,
+                                 url_prefix=url_prefix)
         css_parts.append(css_text)
     sections = []
     chapter_map = {}
@@ -710,12 +880,13 @@ def build_epub_html(epub_dir, out_path, book_id):
             inner = _HEAD_RE.sub("", text)
         chap_dir = posixpath.dirname(chap_rel)
         inner = _rewrite_refs(inner, chap_dir, book_id,
-                              chapter_map=chapter_map)
+                              chapter_map=chapter_map,
+                              url_prefix=url_prefix)
         sections.append(
             '<section id="%s" data-chapter="%s">%s</section>'
             % (chapter_map[chap_rel], html.escape(item_id), inner))
     if not sections:
-        raise RuntimeError("解包出的 AZW3 没有可读章节，文件可能已损坏")
+        raise RuntimeError("解包后没有找到可读章节，文件可能已损坏")
     page = (
         "<!DOCTYPE html>\n<html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, "
@@ -724,6 +895,9 @@ def build_epub_html(epub_dir, out_path, book_id):
         % (html.escape(title), EPUB_BASE_CSS, "\n".join(css_parts),
            "\n".join(sections))
     )
+    # Lazy-load images: a big book must not fetch every picture up front.
+    page = re.sub(r"<img(?![^>]*\bloading\s*=)", '<img loading="lazy"',
+                  page)
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(page)
 
@@ -762,6 +936,73 @@ def azw3_error_page(message):
         "也可以换成 EPUB 或 PDF 放进书库。</p></body></html>"
         % html.escape(message)
     )
+
+
+def epub_error_page(message):
+    return (
+        "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, "
+        "initial-scale=1\"><title>打不开</title>"
+        "<style>body{font-family:system-ui,-apple-system,"
+        "\"PingFang SC\",\"Microsoft YaHei\",sans-serif;max-width:560px;"
+        "margin:40px auto;padding:0 20px;color:#262626;line-height:1.7}"
+        "h1{font-size:18px}</style></head>"
+        "<body data-epub-error=\"1\"><h1>这本 EPUB 打不开</h1>"
+        "<p>%s</p><p>文件可能已损坏；也可以换成 PDF 放进书库。</p>"
+        "</body></html>"
+        % html.escape(message)
+    )
+
+
+def ensure_epub(book):
+    """Unzip an EPUB into data/epub/<id>/ (cached). Returns meta.
+
+    This is what makes big EPUBs open fast: the browser only fetches
+    the extracted HTML page plus the images it scrolls to, instead of
+    downloading and unzipping the whole file up front (the old
+    client-side epub.js path). Raises RuntimeError with a user-facing
+    Chinese message when the file cannot be read.
+    """
+    with _epub_lock:
+        cdir = os.path.join(EPUB_DIR, book["id"])
+        meta_path = os.path.join(cdir, "meta.json")
+        st = os.stat(book["_path"])
+        meta = None
+        try:
+            with open(meta_path, "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+        except (OSError, ValueError):
+            meta = None
+        if (meta and meta.get("src_mtime") == st.st_mtime
+                and meta.get("src_size") == st.st_size
+                and os.path.isfile(os.path.join(cdir, "index.html"))):
+            return meta
+        shutil.rmtree(cdir, ignore_errors=True)
+        os.makedirs(cdir, exist_ok=True)
+        epub_dir = os.path.join(cdir, "epub")
+        try:
+            with zipfile.ZipFile(book["_path"]) as zf:
+                zf.extractall(epub_dir)
+        except Exception:  # noqa: BLE001 - bad zip
+            shutil.rmtree(cdir, ignore_errors=True)
+            raise RuntimeError("这本 EPUB 打不开（文件可能已损坏）")
+        if not os.path.isfile(
+                os.path.join(epub_dir, "META-INF", "container.xml")):
+            shutil.rmtree(cdir, ignore_errors=True)
+            raise RuntimeError("这不是有效的 EPUB 文件")
+        try:
+            build_epub_html(epub_dir, os.path.join(cdir, "index.html"),
+                            book["id"], url_prefix="/api/epub")
+        except Exception as exc:  # noqa: BLE001 - show readable page
+            shutil.rmtree(cdir, ignore_errors=True)
+            raise RuntimeError("这本 EPUB 解包失败：%s" % exc)
+        meta = {"src_mtime": st.st_mtime, "src_size": st.st_size,
+                "title": book["title"], "kind": "epub",
+                "res_root": "epub"}
+        _atomic_write(
+            meta_path,
+            json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
+        return meta
 
 
 def ensure_azw3(book):
@@ -908,6 +1149,93 @@ class Handler(BaseHTTPRequestHandler):
                                                  "application/octet-stream")
         send_file_range(self, path, ctype)
 
+    # -- auth ----------------------------------------------------------
+    def _session_token(self):
+        cookie = self.headers.get("Cookie") or ""
+        for part in cookie.split(";"):
+            part = part.strip()
+            if part.startswith(SESSION_COOKIE + "="):
+                return part[len(SESSION_COOKIE) + 1:]
+        return None
+
+    def _current_user(self):
+        return validate_session(self._session_token())
+
+    def _set_session_cookie(self, token):
+        if token:
+            return [("Set-Cookie",
+                     "%s=%s; HttpOnly; Path=/; Max-Age=%d; SameSite=Lax"
+                     % (SESSION_COOKIE, token, SESSION_TTL))]
+        return [("Set-Cookie",
+                 "%s=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax"
+                 % SESSION_COOKIE)]
+
+    def _redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _redirect_login(self):
+        nxt = urllib.parse.quote(self.path, safe="")
+        self._redirect("/login?next=" + nxt)
+
+    def _do_login(self):
+        try:
+            data = self._read_json()
+        except ValueError as exc:
+            send_json(self, {"ok": False, "error": str(exc)}, status=400)
+            return
+        username = data.get("username")
+        password = data.get("password")
+        if (not isinstance(username, str) or not username.strip()
+                or not isinstance(password, str) or not password):
+            send_json(self, {"ok": False, "error": "请输入账号和密码"},
+                      status=400)
+            return
+        username = username.strip()
+        if not verify_login(username, password):
+            send_json(self, {"ok": False, "error": "账号或密码错误"},
+                      status=401)
+            return
+        token = create_session(username)
+        send_json(self, {"ok": True, "username": username},
+                  extra_headers=self._set_session_cookie(token))
+
+    def _do_logout(self):
+        destroy_session(self._session_token())
+        send_json(self, {"ok": True},
+                  extra_headers=self._set_session_cookie(None))
+
+    def _do_change_password(self, user):
+        try:
+            data = self._read_json()
+        except ValueError as exc:
+            send_json(self, {"ok": False, "error": str(exc)}, status=400)
+            return
+        current = data.get("current_password")
+        new_username = data.get("new_username")
+        new_password = data.get("new_password")
+        if (not isinstance(current, str)
+                or not isinstance(new_password, str)):
+            send_json(self, {"ok": False, "error": "参数无效"}, status=400)
+            return
+        if not verify_login(user, current):
+            send_json(self, {"ok": False, "error": "当前密码不对"},
+                      status=401)
+            return
+        if not new_password:
+            send_json(self, {"ok": False, "error": "新密码不能为空"},
+                      status=400)
+            return
+        username = (new_username.strip()
+                    if isinstance(new_username, str)
+                    and new_username.strip() else user)
+        set_auth(username, new_password)
+        # 只保留当前会话，其它设备/浏览器要重新登录。
+        destroy_other_sessions(self._session_token())
+        send_json(self, {"ok": True, "username": username})
+
     # -- routing ---------------------------------------------------------
     def do_GET(self):
         self._dispatch()
@@ -938,14 +1266,28 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def _handle_get(self, path):
-        if path == "/":
-            self._serve_static("index.html")
-        elif path == "/read":
-            self._serve_static("reader.html")
-        elif path == "/manifest.json":
+        # 公开路径：登录页与静态资源（登录页要加载样式与图标）。
+        if path == "/login":
+            if self._current_user():
+                self._redirect("/")
+                return
+            self._serve_static("login.html")
+            return
+        if path.startswith("/static/"):
+            self._serve_static(path[len("/static/"):])
+            return
+        if path.startswith("/icons/"):
+            name = path[len("/icons/"):]
+            if not _ICON_RE.match(name):
+                self.send_error(404, "Not found")
+                return
+            self._serve_static("icons/" + name, "image/png")
+            return
+        if path == "/manifest.json":
             self._serve_static("manifest.webmanifest",
                                "application/manifest+json")
-        elif path == "/sw.js":
+            return
+        if path == "/sw.js":
             self.send_response(200)
             self.send_header("Content-Type", "application/javascript")
             self.send_header("Service-Worker-Allowed", "/")
@@ -955,14 +1297,19 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(data)
-        elif path.startswith("/static/"):
-            self._serve_static(path[len("/static/"):])
-        elif path.startswith("/icons/"):
-            name = path[len("/icons/"):]
-            if not _ICON_RE.match(name):
-                self.send_error(404, "Not found")
-                return
-            self._serve_static("icons/" + name, "image/png")
+            return
+        # 其余页面与接口一律鉴权：页面跳登录页，接口回 401。
+        if self._current_user() is None:
+            if path in ("/", "/read"):
+                self._redirect_login()
+            else:
+                send_json(self, {"ok": False, "error": "请先登录"},
+                          status=401)
+            return
+        if path == "/":
+            self._serve_static("index.html")
+        elif path == "/read":
+            self._serve_static("reader.html")
         elif path == "/api/version":
             send_json(self, {"version": VERSION, "app": APPNAME})
         elif path == "/api/books":
@@ -990,10 +1337,26 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_cover(book_id)
         elif path.startswith("/api/azw3/"):
             self._serve_azw3(path)
+        elif path.startswith("/api/epub/"):
+            self._serve_epub(path)
         else:
             self.send_error(404, "Not found")
 
     def _handle_post(self, path):
+        # 登录/退出不需事先登录；其余接口一律鉴权。
+        if path == "/api/login":
+            self._do_login()
+            return
+        if path == "/api/logout":
+            self._do_logout()
+            return
+        user = self._current_user()
+        if user is None:
+            send_json(self, {"ok": False, "error": "请先登录"}, status=401)
+            return
+        if path == "/api/change-password":
+            self._do_change_password(user)
+            return
         if path == "/api/rescan":
             books, error = scan_books(force=True)
             send_json(self, {"ok": True, "count": len(books),
@@ -1156,16 +1519,61 @@ class Handler(BaseHTTPRequestHandler):
         ctype = RES_TYPES.get(ext, "application/octet-stream")
         send_file_range(self, path, ctype)
 
+    def _serve_epub(self, path):
+        # /api/epub/<id>/            -> extracted HTML page
+        # /api/epub/<id>/res/<path>  -> extracted resource
+        rest = path[len("/api/epub/"):]
+        parts = [p for p in rest.split("/") if p != ""]
+        if not parts or not _BOOK_RE.match(parts[0]):
+            self.send_error(404, "Book not found")
+            return
+        book_id = parts[0]
+        book = find_book(book_id)
+        if not book or book["format"] != "epub":
+            self.send_error(404, "EPUB not found")
+            return
+        if len(parts) >= 2 and parts[1] == "res":
+            self._serve_epub_res(book, parts[2:])
+            return
+        try:
+            meta = ensure_epub(book)
+        except Exception as exc:  # noqa: BLE001 - show readable page
+            send_text(self, epub_error_page(str(exc)))
+            return
+        index_path = os.path.join(EPUB_DIR, book_id, "index.html")
+        send_file_range(self, index_path, "text/html; charset=utf-8")
+
+    def _serve_epub_res(self, book, rel_parts):
+        if not rel_parts:
+            self.send_error(404, "Resource not found")
+            return
+        try:
+            meta = ensure_epub(book)
+        except Exception as exc:  # noqa: BLE001 - show readable page
+            send_text(self, epub_error_page(str(exc)))
+            return
+        root = os.path.join(EPUB_DIR, book["id"], meta.get("res_root", ""))
+        decoded = [urllib.parse.unquote(p) for p in rel_parts]
+        path = _safe_join(root, *decoded)
+        if not path or not os.path.isfile(path):
+            self.send_error(404, "Resource not found")
+            return
+        ext = os.path.splitext(path)[1].lower()
+        ctype = RES_TYPES.get(ext, "application/octet-stream")
+        send_file_range(self, path, ctype)
+
 
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(COVERS_DIR, exist_ok=True)
+    os.makedirs(EPUB_DIR, exist_ok=True)
     tmpdir = os.path.join(DATA_DIR, "tmp")
     os.makedirs(tmpdir, exist_ok=True)
     # Keep mobi's temp files on the data volume, not on a small /tmp.
     tempfile.tempdir = tmpdir
     load_config()
     load_progress()
+    load_sessions()
     port = resolve_port()
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     server.daemon_threads = True
