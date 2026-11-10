@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /* Browser-level verification for manyue, using jsdom + node-canvas.
  * Loads the REAL pages (shelf + 4 readers) from the running server and
- * lets the REAL frontend JS run (PDF.js, epub.js, shelf/reader logic).
- * jsdom has no layout, so this installs small polyfills before the page
- * scripts run: IntersectionObserver (reports pages 1-3 as visible),
+ * lets the REAL frontend JS run (PDF.js, shelf/reader logic). EPUB is
+ * server-side now (1.0.1): the reader loads a server-extracted page in
+ * a single iframe, no client-side epub.js. jsdom has no layout, so this
+ * installs small polyfills before the page scripts run:
+ * IntersectionObserver (reports pages 1-3 as visible),
  * clientWidth/clientHeight and getBoundingClientRect (fixed phone size).
  * Checks the data-test-* markers the reader sets plus visible text.
  * Usage: node tests/verify_browser_jsdom.js  (server must be running;
@@ -13,13 +15,42 @@ const { spawn } = require('child_process');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
-const { JSDOM, VirtualConsole } = require('jsdom');
+const { JSDOM, VirtualConsole, CookieJar } = require('jsdom');
 
 const ROOT = path.join(__dirname, '..');
 const FIXTURES = path.join(ROOT, 'tests', 'fixtures', 'books');
 const PORT = 18098;
 const BASE = `http://127.0.0.1:${PORT}`;
 const DATA_DIR = '/tmp/manyue-jsdom-data';
+
+// 登录态：main() 先调 /api/login 拿到会话 token，页面加载（cookieJar）
+// 与页内 fetch 桥（Cookie 头）都带上它；未登录时页面会跳到登录页。
+let SESSION_TOKEN = null;
+let cookieJar = null;
+
+async function login() {
+  const res = await fetch(`${BASE}/api/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'admin' }),
+  });
+  const data = await res.json().catch(() => ({}));
+  const setCookie = res.headers.get('set-cookie') || '';
+  const m = /manyue_session=([^;]+)/.exec(setCookie);
+  if (res.ok && data.ok && m) {
+    SESSION_TOKEN = m[1];
+    cookieJar = new CookieJar();
+    cookieJar.setCookieSync(`manyue_session=${SESSION_TOKEN}; Path=/`, BASE + '/');
+    return true;
+  }
+  return false;
+}
+
+// 页内 fetch 桥不走 cookieJar，这里直接给 Node fetch 加 Cookie 头。
+function authedHeaders(extra) {
+  const h = { ...(extra || {}) };
+  if (SESSION_TOKEN) h.Cookie = `manyue_session=${SESSION_TOKEN}`;
+  return h;
+}
 
 const results = [];
 function check(label, ok, detail = '') {
@@ -41,7 +72,9 @@ process.on('uncaughtException', (e) => {
 
 function getJson(pathname) {
   return new Promise((resolve, reject) => {
-    http.get(BASE + pathname, (res) => {
+    const headers = {};
+    if (SESSION_TOKEN) headers.Cookie = `manyue_session=${SESSION_TOKEN}`;
+    http.get(BASE + pathname, { headers }, (res) => {
       let data = '';
       res.on('data', (c) => (data += c));
       res.on('end', () => {
@@ -98,6 +131,7 @@ async function loadPage(url, setup) {
     runScripts: 'dangerously',
     pretendToBeVisual: true,
     virtualConsole,
+    cookieJar,
     beforeParse(window) {
       // jsdom ships no fetch and no web streams: bridge Node's, resolving
       // relative URLs against the page URL (the app calls fetch('/api/...')).
@@ -130,13 +164,19 @@ async function loadPage(url, setup) {
       window.URL.revokeObjectURL = () => {};
       window.fetch = (input, init) => {
         const url = new window.URL(input, window.location.href).href;
-        let nodeInit = init;
+        // 会话 cookie：页内 fetch 桥不走 jsdom 的 cookieJar，这里
+        // 直接加 Cookie 头，否则 /api/* 会回 401。
+        let nodeInit = { ...(init || {}) };
+        if (typeof SESSION_TOKEN === 'string' && SESSION_TOKEN) {
+          nodeInit.headers = { ...(nodeInit.headers || {}),
+            Cookie: 'manyue_session=' + SESSION_TOKEN };
+        }
         if (init && init.signal) {
           const ac = new AbortController();
           const sig = init.signal;
           if (sig.aborted) ac.abort();
           else sig.addEventListener('abort', () => ac.abort(), { once: true });
-          nodeInit = { ...init, signal: ac.signal };
+          nodeInit = { ...nodeInit, signal: ac.signal };
         }
         // Node fetch returns Node-realm objects. Convert the Response's
         // arrayBuffer() to a window-realm ArrayBuffer: epub.js's Book
@@ -163,6 +203,11 @@ async function loadPage(url, setup) {
       window.ReadableStream = ReadableStream;
       window.WritableStream = WritableStream;
       window.TransformStream = TransformStream;
+      // TextDecoder/TextEncoder: real browsers have them, but jsdom 26
+      // does not expose them on the window; the TXT reader needs them
+      // (decodeBytes). Bridge Node's (same API, incl. gbk).
+      window.TextDecoder = TextDecoder;
+      window.TextEncoder = TextEncoder;
       // No layout in jsdom: fixed phone-ish sizes.
       Object.defineProperty(window.HTMLElement.prototype, 'clientWidth', { get() { return 390; }, configurable: true });
       Object.defineProperty(window.HTMLElement.prototype, 'clientHeight', { get() { return 800; }, configurable: true });
@@ -199,10 +244,19 @@ async function loadPage(url, setup) {
         fw.scrollTo = function () {};
         fw.setImmediate = (fn, ...args) => fw.setTimeout(() => fn(...args), 0);
       };
+      let patchTimer = null;
       const patchIframes = () => {
-        window.document.querySelectorAll('iframe').forEach((fr) => {
-          try { patchFrameWindow(fr.contentWindow); } catch (e) { /* not ready yet */ }
-        });
+        // The interval outlives the page: after dom.window.close()
+        // window.document is gone; stop polling instead of throwing.
+        if (!window.document) {
+          if (patchTimer) clearInterval(patchTimer);
+          return;
+        }
+        try {
+          window.document.querySelectorAll('iframe').forEach((fr) => {
+            try { patchFrameWindow(fr.contentWindow); } catch (e) { /* not ready yet */ }
+          });
+        } catch (e) { /* window closed */ }
       };
       // The document has no root element yet inside beforeParse, so arm
       // the observer on a timer; the interval below is the backstop.
@@ -212,7 +266,7 @@ async function loadPage(url, setup) {
         } catch (e) { /* polling below still covers it */ }
         patchIframes();
       }, 50);
-      setInterval(patchIframes, 200);
+      patchTimer = setInterval(patchIframes, 200);
       // IntersectionObserver: report PDF pages 1-3 as visible, everything else as visible.
       window.IntersectionObserver = class {
         constructor(cb) { this.cb = cb; this.targets = new Set(); }
@@ -234,6 +288,18 @@ async function loadPage(url, setup) {
 async function main() {
   const proc = await startServer();
   try {
+    // ---- auth: 未登录打开书架应看到登录页 ---------------------------
+    {
+      const { dom, errors } = await loadPage(BASE + '/');
+      const doc = dom.window.document;
+      check('auth: unauthenticated shelf shows login page',
+        !!doc.getElementById('login-btn')
+        && doc.body.textContent.includes('登录'));
+      check('auth: no page JS errors (login page)', errors.length === 0, errors.slice(0, 2).join(' | '));
+      dom.window.close();
+    }
+    const loggedIn = await login();
+    check('auth: login admin/admin', loggedIn === true);
     const { books } = await getJson('/api/books');
     const bigPdf = books.find((b) => b.title === '测试漫画-大文件');
     const epub = books.find((b) => b.format === 'epub');
@@ -241,6 +307,23 @@ async function main() {
     const azw3 = books.find((b) => b.format === 'azw3');
 
     // ---- shelf -------------------------------------------------------
+    // Seed progress for two books (different times) so the shelf shows
+    // progress bars and a history list. EPUB is posted 1.2s later so it
+    // is the most recent entry (updated is second-resolution).
+    {
+      const seed = async (book, loc, total) => {
+        const r = await fetch(`${BASE}/api/progress`, {
+          method: 'POST', headers: authedHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ book: book.id, loc, total }),
+        });
+        return r.ok;
+      };
+      const s1 = await seed(bigPdf, 12, 36);
+      check('shelf: seed PDF progress', s1 === true);
+      await new Promise((r) => setTimeout(r, 1200));
+      const s2 = await seed(epub, 0.5, 1);
+      check('shelf: seed EPUB progress', s2 === true);
+    }
     {
       const { dom, errors } = await loadPage(BASE + '/');
       const ok = await waitFor(() => dom.window.document.querySelectorAll('.book').length >= 6, 20000, 'shelf grid');
@@ -248,7 +331,37 @@ async function main() {
       check('shelf: 6 books rendered', ok, `(found ${doc.querySelectorAll('.book').length})`);
       check('shelf: big PDF title present', doc.body.textContent.includes('测试漫画-大文件'));
       check('shelf: EPUB title present', doc.body.textContent.includes('测试小说：满月之下'));
+      // folder grouping: 2 collapsible groups, 漫画 (2) and 小说 (4)
+      const groupsOk = await waitFor(() => doc.querySelectorAll('details.folder-group').length === 2, 20000, 'shelf groups');
+      check('shelf: 2 folder groups', groupsOk);
+      const groupSummaries = [...doc.querySelectorAll('details.folder-group summary')].map((s) => s.textContent);
+      check('shelf: group 漫画 has 2 books', groupSummaries.some((t) => t.includes('漫画') && t.includes('2')));
+      check('shelf: group 小说 has 4 books', groupSummaries.some((t) => t.includes('小说') && t.includes('4')));
+      const mangaGroup = [...doc.querySelectorAll('details.folder-group')].find((g) => g.querySelector('summary').textContent.includes('漫画'));
+      const novelGroup = [...doc.querySelectorAll('details.folder-group')].find((g) => g.querySelector('summary').textContent.includes('小说'));
+      check('shelf: 漫画 group has the 2 PDFs', mangaGroup && mangaGroup.querySelectorAll('.book').length === 2);
+      check('shelf: 小说 group has the 4 books', novelGroup && novelGroup.querySelectorAll('.book').length === 4);
       check('shelf: no page JS errors', errors.length === 0, errors.slice(0, 2).join(' | '));
+      // progress bars: wait for the progress render (after /api/progress)
+      const progOk = await waitFor(() => doc.querySelectorAll('.book .prog').length >= 2, 20000, 'shelf progress');
+      check('shelf: progress bars rendered', progOk);
+      const progTexts = [...doc.querySelectorAll('.book .prog-text')].map((el) => el.textContent);
+      check('shelf: PDF card shows 已读 33%', progTexts.some((t) => t.includes('已读 33%')));
+      check('shelf: EPUB card shows 已读 50%', progTexts.some((t) => t.includes('已读 50%')));
+      const progFills = [...doc.querySelectorAll('.book .prog-fill')].map((el) => el.style.width);
+      check('shelf: progress bar widths 33%/50%', progFills.includes('33%') && progFills.includes('50%'), `(${progFills.join(',')})`);
+      // history: most recent first (EPUB posted later)
+      const histOk = await waitFor(() => doc.querySelectorAll('.history-item').length >= 2, 20000, 'shelf history');
+      check('shelf: history has 2 entries', histOk);
+      const histSection = doc.getElementById('history-section');
+      check('shelf: history section visible', histSection && !histSection.classList.contains('hidden'));
+      const histTitles = [...doc.querySelectorAll('.history-item .history-title')].map((el) => el.textContent);
+      check('shelf: history newest first (EPUB)', histTitles[0] && histTitles[0].includes('测试小说'));
+      check('shelf: history second is PDF', histTitles[1] && histTitles[1].includes('测试漫画-大文件'));
+      const histPos = [...doc.querySelectorAll('.history-item .history-pos')].map((el) => el.textContent);
+      check('shelf: history shows progress text', histPos.some((t) => t.includes('已读 50%')) && histPos.some((t) => t.includes('已读 33%')), `(${histPos.join('|')})`);
+      const histLinks = [...doc.querySelectorAll('.history-item')].map((el) => el.getAttribute('href'));
+      check('shelf: history links open the book', histLinks.some((h) => h && h.includes(epub.id)) && histLinks.some((h) => h && h.includes(bigPdf.id)), `(${histLinks.join('|')})`);
       // cover generation: wait for a PDF cover to be uploaded
       const coverOk = await waitFor(() => {
         const imgs = [...doc.querySelectorAll('.book .cover img')];
@@ -269,7 +382,7 @@ async function main() {
       check('PDF: page 1 rendered to canvas', rendered);
       const canvases = doc.querySelectorAll('#pdf-viewer canvas').length;
       check('PDF: at least one canvas in viewer', canvases >= 1, `(${canvases})`);
-      check('PDF: position label "第 1 / 36 页"', doc.getElementById('pos-label').textContent.includes('第 1 / 36 页'),
+      check('PDF: position label "第 12 / 36 页" (restored from seeded progress)', doc.getElementById('pos-label').textContent.includes('第 12 / 36 页'),
         `(${doc.getElementById('pos-label').textContent})`);
       // canvas actually painted (not blank): sample pixels
       const canvas = doc.querySelector('#pdf-viewer canvas');
@@ -286,61 +399,59 @@ async function main() {
       dom.window.close();
     }
 
-    // ---- EPUB reader ---------------------------------------------------
+    // ---- EPUB reader (server-side, 1.0.1) -----------------------------
+    // EPUB is now a server-extracted page in a single iframe
+    // (#epub-frame), not client-side epub.js. The browser only fetches
+    // the small extracted HTML; the big file never reaches the browser.
     {
       const { dom, errors } = await loadPage(`${BASE}/read?book=${epub.id}`);
       const doc = dom.window.document;
-      const ok = await waitFor(() => doc.body.getAttribute('data-test-epub') === '1', 60000, 'epub relocate');
-      check('EPUB: rendition relocated', ok);
+      const ok = await waitFor(() => doc.body.getAttribute('data-test-epub') === '1', 60000, 'epub load');
+      check('EPUB: iframe loaded (server-side)', ok);
       const label = doc.getElementById('pos-label').textContent;
-      check('EPUB: position label set', /第 \d+/.test(label), `(${label})`);
-      // The continuous manager keeps every rendered section as its own
-      // iframe, so read ALL of them (the first is the cover page).
-      const allIframeText = () => {
-        let out = '';
-        doc.querySelectorAll('#epub-viewer iframe').forEach((frame) => {
-          try { if (frame.contentDocument) out += frame.contentDocument.body.textContent || ''; } catch (e) { /* ignore */ }
-        });
-        return out;
+      check('EPUB: position label "已读 0%"', label.includes('已读 0%'), `(${label})`);
+      const frame = doc.getElementById('epub-frame');
+      check('EPUB: #epub-frame present', !!frame);
+      const frameText = () => {
+        try {
+          const fd = frame && frame.contentDocument;
+          return (fd && fd.body && fd.body.textContent) || '';
+        } catch (e) { return ''; }
       };
-      const coverOk = await waitFor(() => allIframeText().includes('测试小说：满月之下'), 30000, 'epub cover text');
-      check('EPUB: cover page rendered in iframe', coverOk, `(len ${allIframeText().length})`);
-      // Dummy blob: URLs from the createObjectURL shim cannot be fetched
-      // by jsdom's resource loader (real browsers resolve them); ignore
-      // those load failures, they are not JS errors.
-      const realErrors = errors.filter((e) => !/Could not load (link|img|script): "blob:jsdom\//.test(e));
-      check('EPUB: no page JS errors', realErrors.length === 0, realErrors.slice(0, 2).join(' | '));
+      const coverOk = await waitFor(() => frameText().includes('测试小说：满月之下'), 30000, 'epub title in iframe');
+      check('EPUB: title rendered in iframe', coverOk, `(len ${frameText().length})`);
+      check('EPUB: chapter 1 text in iframe', frameText().includes('月亮升起来的时候'));
+      check('EPUB: chapter 2 text in iframe', frameText().includes('第二章'));
+      check('EPUB: no page JS errors', errors.length === 0, errors.slice(0, 2).join(' | '));
       dom.window.close();
     }
 
-    // ---- EPUB: chapter 1 via progress restore --------------------------
-    // jsdom has no layout, so scroll-driven "next page" cannot advance
-    // sections; instead verify chapter rendering through the app's own
-    // resume feature: save a CFI for chapter 1, reopen the book, and
-    // check chapter 1's text renders. The CFI mirrors the one epub.js
-    // itself generates for a chapter start (spine /6/4 = ch1).
+    // ---- EPUB: resume via fraction progress ---------------------------
+    // New model stores progress as a 0..1 scroll fraction (not CFI).
+    // Save 0.5, reopen, and verify the book still loads cleanly and
+    // chapter text renders. (Scroll position itself cannot be verified
+    // in jsdom: no layout, so scrollHeight is 0 and the restore is a
+    // no-op there; the restore is exercised in a real browser.)
     {
-      const cfi = 'epubcfi(/6/4!/4/4/1:0)';
       const saved = await fetch(`${BASE}/api/progress`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ book: epub.id, loc: cfi, total: 1 }),
+        method: 'POST', headers: authedHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ book: epub.id, loc: 0.5, total: 1 }),
       }).then((r) => r.json()).catch(() => ({}));
-      check('EPUB: progress saved for chapter 1', saved.ok === true, JSON.stringify(saved).slice(0, 80));
+      check('EPUB: fraction progress saved', saved.ok === true, JSON.stringify(saved).slice(0, 80));
       const { dom, errors } = await loadPage(`${BASE}/read?book=${epub.id}`);
       const doc = dom.window.document;
-      const ok = await waitFor(() => doc.body.getAttribute('data-test-epub') === '1', 60000, 'epub relocate ch1');
-      check('EPUB: rendition relocated (resume)', ok);
-      const allIframeText = () => {
-        let out = '';
-        doc.querySelectorAll('#epub-viewer iframe').forEach((frame) => {
-          try { if (frame.contentDocument) out += frame.contentDocument.body.textContent || ''; } catch (e) { /* ignore */ }
-        });
-        return out;
+      const ok = await waitFor(() => doc.body.getAttribute('data-test-epub') === '1', 60000, 'epub load (resume)');
+      check('EPUB: iframe loaded (resume)', ok);
+      const frame = doc.getElementById('epub-frame');
+      const frameText = () => {
+        try {
+          const fd = frame && frame.contentDocument;
+          return (fd && fd.body && fd.body.textContent) || '';
+        } catch (e) { return ''; }
       };
-      const ch1 = await waitFor(() => allIframeText().includes('月亮升起来的时候'), 30000, 'epub ch1 text');
-      check('EPUB: chapter 1 text rendered after resume', ch1, `(len ${allIframeText().length})`);
-      const realErrors = errors.filter((e) => !/Could not load (link|img|script): "blob:jsdom\//.test(e));
-      check('EPUB: no page JS errors (resume)', realErrors.length === 0, realErrors.slice(0, 2).join(' | '));
+      const ch1 = await waitFor(() => frameText().includes('月亮升起来的时候'), 30000, 'epub ch1 text');
+      check('EPUB: chapter 1 text rendered after resume', ch1, `(len ${frameText().length})`);
+      check('EPUB: no page JS errors (resume)', errors.length === 0, errors.slice(0, 2).join(' | '));
       dom.window.close();
     }
 
