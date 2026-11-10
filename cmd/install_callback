@@ -13,6 +13,6 @@ else
     APPDEST="$SCRIPT_DIR/.."
 fi
 
-DATA_DIR="${MANYUE_DATA_DIR:-${TRIM_PKGVAR:-$APPDEST/data}}"
+DATA_DIR="${KELE_DATA_DIR:-${TRIM_PKGVAR:-$APPDEST/data}}"
 mkdir -p "$DATA_DIR" 2>/dev/null
 exit 0
