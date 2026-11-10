@@ -21,8 +21,8 @@
   <div id="loading" style="text-align:center;color:#999;padding:60px 16px;">正在打开…</div>
   <!-- PDF -->
   <div id="pdf-viewer" class="pdf-pages hidden"></div>
-  <!-- EPUB -->
-  <div id="epub-viewer" class="epub-viewer hidden"></div>
+  <!-- EPUB（服务端解包，iframe 承载） -->
+  <iframe id="epub-frame" class="hidden" title="EPUB 阅读器"></iframe>
   <!-- TXT -->
   <div id="txt-viewer" class="hidden">
     <div class="page-slider hidden" id="txt-slider-wrap">
@@ -46,8 +46,6 @@
 </footer>
 
 <script src="/static/pdf.min.js"></script>
-<script src="/static/jszip.min.js"></script>
-<script src="/static/epub.min.js"></script>
 <script src="/static/reader.js"></script>
 </body>
 </html>
