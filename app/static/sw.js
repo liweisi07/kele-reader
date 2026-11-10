@@ -1,5 +1,5 @@
-/* 满月阅读 — Service Worker */
-var CACHE_NAME = 'manyue-v2';
+/* 可乐阅读 — Service Worker */
+var CACHE_NAME = 'kele-v1';
 // 只预缓存公开静态资源；/ 与 /read 要登录，不预缓存（登录页
 // 不能缓存到 / 下面），页面一律走网络。
 var APP_SHELL = [
