@@ -1,4 +1,4 @@
-/* 满月阅读 — 书架逻辑：文件夹分组、每本进度、阅读历史 */
+/* 可乐阅读 — 书架逻辑：文件夹分组、每本进度、阅读历史 */
 (function () {
   'use strict';
 
@@ -14,6 +14,8 @@
   var errorBox = document.getElementById('error-box');
   var countEl = document.getElementById('book-count');
   var searchInput = document.getElementById('search-input');
+  var sortSelect = document.getElementById('sort-select');
+  var sortMode = 'title';   // title | size | date | progress
   var setupCard = document.getElementById('setup-card');
   var folderInput = document.getElementById('folder-input');
   var setupStatus = document.getElementById('setup-status');
@@ -240,6 +242,33 @@
     }).join('');
   }
 
+  /* ---------- 排序（文件夹内排序，对所有格式生效） ---------- */
+  // title：书名升序；size：文件从大到小；date：修改时间从新到旧；
+  // progress：阅读进度从高到低（无进度排最后）。
+  function sortBooks(list) {
+    var arr = list.slice();
+    if (sortMode === 'size') {
+      arr.sort(function (a, b) { return (b.size || 0) - (a.size || 0); });
+    } else if (sortMode === 'date') {
+      arr.sort(function (a, b) {
+        return (b.mtime || '') < (a.mtime || '') ? -1 : ((b.mtime || '') > (a.mtime || '') ? 1 : 0);
+      });
+    } else if (sortMode === 'progress') {
+      arr.sort(function (a, b) {
+        var pa = progressPct(a, progressById[a.id]);
+        var pb = progressPct(b, progressById[b.id]);
+        if (pa === null) pa = -1;
+        if (pb === null) pb = -1;
+        return pb - pa;
+      });
+    } else {
+      arr.sort(function (a, b) {
+        return (a.title || '').localeCompare(b.title || '', 'zh');
+      });
+    }
+    return arr;
+  }
+
   /* ---------- 渲染书架（按文件夹分组） ---------- */
   function bookCardHtml(b) {
     var coverHtml;
@@ -299,9 +328,9 @@
       return a < b ? -1 : (a > b ? 1 : 0);
     });
     shelfEl.innerHTML = order.map(function (f) {
-      var items = groups[f];
+      var items = sortBooks(groups[f]);
       var label = f === '' ? '根目录' : f;
-      return '<details class="folder-group" open>' +
+      return '<details class="folder-group">' +
         '<summary><span class="folder-name">' + esc(label) + '</span>' +
         '<span class="folder-count">' + items.length + ' 本</span></summary>' +
         '<div class="grid">' + items.map(bookCardHtml).join('') + '</div></details>';
@@ -482,6 +511,23 @@
   });
 
   searchInput.addEventListener('input', renderGrid);
+
+  // 排序切换：对所有书（含 PDF）生效，文件夹内重排。
+  if (sortSelect) {
+    sortSelect.addEventListener('change', function () {
+      sortMode = sortSelect.value || 'title';
+      renderGrid();
+    });
+  }
+
+  // 设置页“返回书架”：收起两张设置卡，回到顶部。
+  document.querySelectorAll('.back-home-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      setupCard.classList.add('hidden');
+      accountCard.classList.add('hidden');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  });
 
   /* ---------- 启动 ---------- */
   loadSettings();
