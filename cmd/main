@@ -1,5 +1,5 @@
 #!/bin/sh
-# manyue lifecycle: main start | stop | status
+# kele lifecycle: main start | stop | status
 # Exit codes (fnOS contract): start/stop 0 ok, 1 failed;
 # status 0 running, 3 not running, 1 unknown action.
 # Data lives in TRIM_PKGVAR (persistent) when provided.
@@ -16,8 +16,8 @@ else
     APPDEST="$SCRIPT_DIR/.."
 fi
 
-DATA_DIR="${MANYUE_DATA_DIR:-${TRIM_PKGVAR:-$APPDEST/data}}"
-PIDFILE="$DATA_DIR/manyue.pid"
+DATA_DIR="${KELE_DATA_DIR:-${TRIM_PKGVAR:-$APPDEST/data}}"
+PIDFILE="$DATA_DIR/kele.pid"
 LOGFILE="$DATA_DIR/app.log"
 PORT="${wizard_port:-${TRIM_SERVICE_PORT:-18090}}"
 
@@ -38,9 +38,9 @@ find_python() {
 fail() {
     msg="$1"
     if [ -n "$TRIM_TEMP_LOGFILE" ]; then
-        echo "manyue: $msg" >> "$TRIM_TEMP_LOGFILE" 2>/dev/null
+        echo "kele: $msg" >> "$TRIM_TEMP_LOGFILE" 2>/dev/null
     fi
-    echo "manyue: $msg" >&2
+    echo "kele: $msg" >&2
     exit 1
 }
 
@@ -55,7 +55,7 @@ case "$1" in
         fi
         PY=$(find_python) || fail "未找到 python3，请先在应用中心安装 Python 工具后再启动"
         mkdir -p "$DATA_DIR" || fail "无法创建数据目录 $DATA_DIR"
-        MANYUE_DATA_DIR="$DATA_DIR" MANYUE_PORT="$PORT" \
+        KELE_DATA_DIR="$DATA_DIR" KELE_PORT="$PORT" \
             TRIM_APPDEST="$APPDEST" nohup "$PY" "$APPDEST/app.py" \
             >>"$LOGFILE" 2>&1 &
         echo $! > "$PIDFILE"
