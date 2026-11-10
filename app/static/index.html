@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101828">
+<link rel="manifest" href="/manifest.json">
+<link rel="stylesheet" href="/static/style.css">
+<title>满月阅读</title>
+</head>
+<body>
+<header class="topbar">
+  <h1>🌕 满月阅读</h1>
+  <a class="linkbtn" href="#settings" id="settings-link">设置</a>
+  <button id="rescan-btn" type="button">重新扫描</button>
+</header>
+
+<main class="page">
+  <div id="error-box" class="error hidden"></div>
+
+  <div id="continue-strip" class="continue-strip hidden">
+    <span class="moon">🌕</span>
+    <div class="info">
+      <div class="label">继续阅读</div>
+      <div class="book-title" id="continue-title"></div>
+      <div class="pos" id="continue-pos"></div>
+    </div>
+    <a class="go" id="continue-link" href="#">继续 ›</a>
+  </div>
+
+  <div id="setup-card" class="card hidden">
+    <h2>设置书库文件夹</h2>
+    <p>把漫画 / 电子书放到 NAS 上的一个文件夹里，填好路径后点保存；请在飞牛文件管理里给 manyue 账号该文件夹的读取权限。</p>
+    <div class="row">
+      <input type="text" id="folder-input" placeholder="例如 /mnt/data/books" autocomplete="off">
+      <button class="btn" id="save-folder-btn" type="button">保存</button>
+    </div>
+    <p class="muted" id="setup-status" style="margin: 10px 0 0;"></p>
+  </div>
+
+  <div class="searchbar">
+    <input type="search" id="search-input" placeholder="搜索书名…" autocomplete="off">
+  </div>
+
+  <div id="book-count" class="muted" style="margin-bottom: 12px;"></div>
+  <div id="grid" class="grid"></div>
+  <div id="empty" class="empty hidden">这里还没有书<br><span style="font-size:13px">先在设置里填好书库文件夹，再点“重新扫描”</span></div>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/static/pdf.min.js"></script>
+<script src="/static/shelf.js"></script>
+</body>
+</html>
