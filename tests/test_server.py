@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for manyue app.py (no server needed).
+"""Unit tests for kele app.py (no server needed).
 
 Run: python3 tests/test_server.py
 Uses tests/fixtures/books/ as the book folder and a temp data dir.
@@ -19,9 +19,9 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURES = os.path.join(ROOT, "tests", "fixtures", "books")
 
-DATA_DIR = tempfile.mkdtemp(prefix="manyue-test-")
-os.environ["MANYUE_DATA_DIR"] = DATA_DIR
-os.environ["MANYUE_PORT"] = "18099"
+DATA_DIR = tempfile.mkdtemp(prefix="kele-test-")
+os.environ["KELE_DATA_DIR"] = DATA_DIR
+os.environ["KELE_PORT"] = "18099"
 
 sys.path.insert(0, os.path.join(ROOT, "app"))
 sys.path.insert(0, os.path.join(ROOT, "app", "vendor"))
@@ -94,7 +94,7 @@ class TestScan(unittest.TestCase):
 
     def test_missing_folder_error(self):
         with appmod._config_lock:
-            appmod._config["book_folder"] = "/nonexistent/manyue"
+            appmod._config["book_folder"] = "/nonexistent/kele"
         books, error = appmod.scan_books(force=True)
         self.assertEqual(books, [])
         self.assertIn("不存在", error)
@@ -215,12 +215,12 @@ class TestCovers(unittest.TestCase):
 
 class TestSafeJoin(unittest.TestCase):
     def test_escape_rejected(self):
-        root = "/tmp/manyue-root"
+        root = "/tmp/kele-root"
         self.assertIsNone(appmod._safe_join(root, "..", "etc", "passwd"))
         self.assertIsNone(appmod._safe_join(root, "a", "..", "..", "x"))
         self.assertEqual(
             appmod._safe_join(root, "a", "b.png"),
-            "/tmp/manyue-root/a/b.png")
+            "/tmp/kele-root/a/b.png")
 
 
 class TestAzw3(unittest.TestCase):
@@ -272,7 +272,7 @@ class TestAzw3(unittest.TestCase):
         self.assertIn("不是有效的 AZW3", str(ctx.exception))
 
     def test_rewrite_refs(self):
-        chapter_map = {"OEBPS/Text/part0001.xhtml": "manyue-ch-ch1"}
+        chapter_map = {"OEBPS/Text/part0001.xhtml": "kele-ch-ch1"}
         out = appmod._rewrite_refs(
             '<img src="../Images/a.png">'
             '<a href="part0001.xhtml#ch1">next</a>'
@@ -291,7 +291,7 @@ class TestEpubHtml(unittest.TestCase):
         import zipfile
         books = scan()
         epub = [b for b in books if b["format"] == "epub"][0]
-        tmp = tempfile.mkdtemp(prefix="manyue-epub-")
+        tmp = tempfile.mkdtemp(prefix="kele-epub-")
         try:
             with zipfile.ZipFile(epub["_path"]) as zf:
                 zf.extractall(tmp)
@@ -316,7 +316,7 @@ class TestEpubHtml(unittest.TestCase):
         import zipfile
         books = scan()
         epub = [b for b in books if b["format"] == "epub"][0]
-        tmp = tempfile.mkdtemp(prefix="manyue-epub-")
+        tmp = tempfile.mkdtemp(prefix="kele-epub-")
         try:
             with zipfile.ZipFile(epub["_path"]) as zf:
                 zf.extractall(tmp)
@@ -329,6 +329,33 @@ class TestEpubHtml(unittest.TestCase):
                 "/api/epub/deadbeef00000003/res/OEBPS/Images/cover.png",
                 text)
             self.assertNotIn("/api/azw3/", text)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_manga_images_fit_width(self):
+        # Issue 2: manga EPUBs whose own CSS fixes image sizes (e.g.
+        # width:1200px / height:100vh) used to clip pages to a partial
+        # view. The base CSS must come AFTER the EPUB's own CSS and
+        # force images to fit width with height:auto.
+        import zipfile
+        books = scan()
+        epub = [b for b in books if b["format"] == "epub"][0]
+        tmp = tempfile.mkdtemp(prefix="kele-epub-")
+        try:
+            with zipfile.ZipFile(epub["_path"]) as zf:
+                zf.extractall(tmp)
+            out = os.path.join(tmp, "out.html")
+            appmod.build_epub_html(tmp, out, "deadbeef00000004",
+                                   url_prefix="/api/epub")
+            with open(out, "r", encoding="utf-8") as fh:
+                text = fh.read()
+            # EPUB's own CSS (font-size:18px) must precede the base CSS.
+            idx_epub = text.find("font-size:18px")
+            idx_base = text.find("max-width:100%!important")
+            self.assertGreater(idx_epub, 0)
+            self.assertGreater(idx_base, idx_epub)
+            self.assertIn("height:auto!important", text)
+            self.assertIn("display:block", text)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
