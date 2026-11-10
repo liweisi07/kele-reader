@@ -1,19 +1,19 @@
-# 满月阅读 — 前端说明（FRONTEND_NOTES）
+# 可乐阅读 — 前端说明（FRONTEND_NOTES）
 
 ## 写好的文件（都在 `~/workspace/manyue-reader/app/static/` 下）
 
 | 文件 | 说明 |
 |---|---|
-| `index.html` | 书架页：顶栏（满月阅读 / 设置 / 重新扫描）、继续阅读条、设置卡片、搜索框、书格 |
+| `index.html` | 书架页：顶栏（可乐阅读 / 设置 / 重新扫描）、继续阅读条、设置卡片、搜索框、书格 |
 | `shelf.js` | 书架逻辑：拉书库、渲染、继续阅读、搜索、重新扫描、保存书库路径、懒生成 PDF 封面 |
 | `reader.html` | 阅读器页骨架：顶栏（‹ 书架 / 标题 / 格式徽标）、viewer、底部工具栏 |
 | `reader.js` | 阅读器逻辑：PDF / EPUB / TXT / AZW3 四种格式 + 进度恢复与保存 |
 | `style.css` | 两页共享样式，移动优先，内容最大宽 720px，点按目标 ≥44px |
-| `manifest.webmanifest` | PWA 清单（name/short_name 满月阅读，standalone，主题色 #101828） |
-| `sw.js` | Service Worker，缓存名 `manyue-v1` |
+| `manifest.webmanifest` | PWA 清单（name/short_name 可乐阅读，standalone，主题色 #101828） |
+| `sw.js` | Service Worker，缓存名 `kele-v1` |
 | `pdf.min.js` / `pdf.worker.min.js` | pdfjs-dist 3.11.174 legacy UMD（已从 /tmp/vendor 拷入） |
 | `epub.min.js` / `jszip.min.js` | epubjs 0.3.93 + JSZip（已从 /tmp/vendor 拷入） |
-| `icons/icon-192.png` / `icons/icon-512.png` | PWA 图标：深蓝圆角方块 + 淡色满月 + 底部白色小书 |
+| `icons/icon-192.png` / `icons/icon-512.png` | PWA 图标：亮红底可乐杯（加冰，红白条纹吸管） |
 | `FRONTEND_NOTES.md` | 本文件 |
 
 ## 依赖的 API 端点（按合同原样使用，未改动）
