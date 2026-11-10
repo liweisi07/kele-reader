@@ -20,6 +20,9 @@
   var posLabel = document.getElementById('pos-label');
   var prevBtn = document.getElementById('prev-btn');
   var nextBtn = document.getElementById('next-btn');
+  var prevChapterBtn = document.getElementById('prev-chapter-btn');
+  var nextChapterBtn = document.getElementById('next-chapter-btn');
+  var chapterLabel = document.getElementById('chapter-label');
   var fontMinus = document.getElementById('font-minus');
   var fontPlus = document.getElementById('font-plus');
   var zoomOut = document.getElementById('zoom-out');
@@ -27,6 +30,9 @@
   var zoomFit = document.getElementById('zoom-fit');
 
   var book = null;          // {id,title,format,...}
+  var allBooks = [];        // /api/books 全量，用于算上一章/下一章
+  var chapterPrev = null;   // 上一本 {id,...} 或 null
+  var chapterNext = null;   // 下一本 {id,...} 或 null
   var savedLoc = null;      // 恢复用的 loc
   var savedTotal = null;
   var saveTimer = null;
@@ -103,6 +109,7 @@
       .then(function (r) { return r.json().catch(function () { return { books: [] }; }); })
       .then(function (data) {
         var list = Array.isArray(data.books) ? data.books : [];
+        allBooks = list;
         book = null;
         for (var i = 0; i < list.length; i++) {
           if (list[i].id === bookId) { book = list[i]; break; }
@@ -111,6 +118,7 @@
         setTitle(book.title || '未命名');
         badgeEl.textContent = (book.format || '').toUpperCase();
         badgeEl.classList.add((book.format || '').toLowerCase());
+        updateChapterNav();
         return apiFetch('/api/progress')
           .then(function (r) { return r.json().catch(function () { return {}; }); })
           .catch(function (e) {
@@ -138,6 +146,48 @@
     else if (fmt === 'txt') initTxt();
     else if (fmt === 'azw3') initAzw3();
     else showError('暂不支持这种格式');
+  }
+
+  /* ================= 上一章 / 下一章 ================= */
+  // 同文件夹内的书按书名排（与书架默认排序同一口径，系列编号
+  // 001/002/003 的顺序就是对的）。点上一章/下一章直接跳到那本书，
+  // 跳过去由现有的 openBook + 进度恢复逻辑接管：读过的回到上次的
+  // 位置，没读过的从头开始。
+  function chapterSiblings() {
+    var folder = (book && book.folder) || '';
+    var sibs = allBooks.filter(function (b) { return ((b.folder || '') === folder); });
+    sibs.sort(function (a, b) { return (a.title || '').localeCompare(b.title || '', 'zh'); });
+    var idx = -1;
+    for (var i = 0; i < sibs.length; i++) { if (sibs[i].id === bookId) { idx = i; break; } }
+    return { list: sibs, idx: idx };
+  }
+
+  function updateChapterNav() {
+    var s = chapterSiblings();
+    chapterPrev = (s.idx > 0) ? s.list[s.idx - 1] : null;
+    chapterNext = (s.idx >= 0 && s.idx < s.list.length - 1) ? s.list[s.idx + 1] : null;
+    if (prevChapterBtn) {
+      prevChapterBtn.disabled = !chapterPrev;
+      prevChapterBtn.setAttribute('data-target', chapterPrev ? chapterPrev.id : '');
+    }
+    if (nextChapterBtn) {
+      nextChapterBtn.disabled = !chapterNext;
+      nextChapterBtn.setAttribute('data-target', chapterNext ? chapterNext.id : '');
+    }
+    if (chapterLabel) {
+      chapterLabel.textContent = s.idx >= 0
+        ? ('第 ' + (s.idx + 1) + ' / ' + s.list.length + ' 章') : '—';
+    }
+    // 供测试读取的标记：当前章序号/同文件夹总数
+    document.body.setAttribute('data-test-chapter',
+      s.idx >= 0 ? ((s.idx + 1) + '/' + s.list.length) : '');
+  }
+
+  function goToChapter(id) {
+    if (!id) return;
+    // 先把当前这本的进度落盘（pagehide/beforeunload 也会兜底），再跳。
+    flushSave();
+    window.location.href = '/read?book=' + encodeURIComponent(id);
   }
 
   /* ================= PDF ================= */
@@ -578,6 +628,15 @@
   }
 
   /* ================= 工具栏 ================= */
+  // 上一章 / 下一章：跳到同文件夹的上一本/下一本（按书名顺序）。
+  // 按钮置灰时 chapterPrev/Next 为 null，点它什么也不做。
+  prevChapterBtn.addEventListener('click', function () {
+    if (chapterPrev) goToChapter(chapterPrev.id);
+  });
+  nextChapterBtn.addEventListener('click', function () {
+    if (chapterNext) goToChapter(chapterNext.id);
+  });
+
   prevBtn.addEventListener('click', function () {
     if (!book) return;
     var fmt = (book.format || '').toLowerCase();
