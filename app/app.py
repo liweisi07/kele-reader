@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""满月阅读 manyue：飞牛 FnOS 原生电子书/漫画阅读应用。
+"""可乐阅读 kele：飞牛 FnOS 原生电子书/漫画阅读应用。
 
 书架 + 阅读器，跑在 NAS 上，手机/电脑用浏览器在局域网内打开。
 支持 PDF（漫画主力）、EPUB、TXT、AZW3 四种格式，**不设文件大小
@@ -54,10 +54,10 @@ STATIC_DIR = os.path.join(APP_DIR, "static")
 sys.path.insert(0, VENDOR_DIR)
 sys.path.insert(0, APP_DIR)
 
-VERSION = "1.0.1"
-APPNAME = "manyue"
+VERSION = "1.0.2"
+APPNAME = "kele"
 DEFAULT_PORT = 18090
-SESSION_COOKIE = "manyue_session"
+SESSION_COOKIE = "kele_session"
 SESSION_TTL = 30 * 24 * 3600  # 会话有效期 30 天
 DEFAULT_USERNAME = "admin"
 DEFAULT_PASSWORD = "admin"
@@ -78,7 +78,7 @@ SCAN_TTL = 300  # 书库扫描缓存 5 分钟，改动用“重新扫描”
 # --------------------------------------------------------------------------
 
 def resolve_data_dir():
-    for key in ("MANYUE_DATA_DIR", "TRIM_PKGVAR"):
+    for key in ("KELE_DATA_DIR", "TRIM_PKGVAR"):
         value = os.environ.get(key)
         if value:
             return value
@@ -96,7 +96,7 @@ EPUB_DIR = os.path.join(DATA_DIR, "epub")
 
 
 def resolve_port():
-    for key in ("MANYUE_PORT", "wizard_port", "TRIM_SERVICE_PORT"):
+    for key in ("KELE_PORT", "wizard_port", "TRIM_SERVICE_PORT"):
         value = os.environ.get(key)
         if value:
             try:
@@ -415,7 +415,7 @@ def scan_books(force=False):
         try:
             os.listdir(folder)
         except OSError as exc:
-            error = "书库文件夹打不开（%s）。请在飞牛文件管理里给 manyue 账号该文件夹的读取权限。" % exc
+            error = "书库文件夹打不开（%s）。请在飞牛文件管理里给 kele 账号该文件夹的读取权限。" % exc
     if not error:
         for root, dirs, files in os.walk(folder):
             dirs[:] = sorted(d for d in dirs if not d.startswith("."))
@@ -501,7 +501,7 @@ def folder_status():
         os.listdir(folder)
     except OSError as exc:
         return False, ("书库文件夹打不开（%s）。请在飞牛文件管理里给 "
-                       "manyue 账号该文件夹的读取权限。" % exc)
+                       "kele 账号该文件夹的读取权限。" % exc)
     return True, ""
 
 
@@ -701,7 +701,12 @@ EPUB_BASE_CSS = (
     "background:#f7f3ea;max-width:720px;margin:0 auto;"
     "padding:16px 18px;font-family:system-ui,-apple-system,"
     "\"PingFang SC\",\"Microsoft YaHei\",sans-serif}"
-    "img,svg{max-width:100%;height:auto}"
+    # 漫画图必须完整显示：强制按宽度适配、保持宽高比，压过 EPUB 自带
+    # 的定宽/定高/绝对定位样式（有些漫画 EPUB 会给 img 写死尺寸或
+    # height:100%，导致图片被裁、只露出一截）。
+    "img,svg{display:block;max-width:100%!important;"
+    "height:auto!important;margin:0 auto}"
+    "section,div{max-width:100%!important}"
     "h1,h2,h3{line-height:1.4}"
     "p{margin:.6em 0}"
     "a{color:#1677ff}"
@@ -748,7 +753,7 @@ def _rewrite_refs(text, base_dir, book_id, chapter_map=None,
     """Rewrite src/href/xlink:href/url(...) in a chapter to res/ URLs.
 
     Internal links to another spine chapter become in-page anchors
-    (``#manyue-ch-<itemid>`` or the original ``#fragment``), so the
+    (``#kele-ch-<itemid>`` or the original ``#fragment``), so the
     concatenated page stays in one piece instead of navigating the
     reader away to a raw chapter file.
 
@@ -857,7 +862,7 @@ def build_epub_html(epub_dir, out_path, book_id, url_prefix="/api/azw3"):
         if mtype not in ("application/xhtml+xml", "text/html"):
             continue
         chap_rel = posixpath.join(opf_dir, href) if opf_dir else href
-        chapter_map[chap_rel] = "manyue-ch-" + item_id
+        chapter_map[chap_rel] = "kele-ch-" + item_id
     for item_id in spine:
         entry = manifest.get(item_id)
         if not entry:
@@ -887,12 +892,14 @@ def build_epub_html(epub_dir, out_path, book_id, url_prefix="/api/azw3"):
             % (chapter_map[chap_rel], html.escape(item_id), inner))
     if not sections:
         raise RuntimeError("解包后没有找到可读章节，文件可能已损坏")
+    # 基础样式放最后：EPUB 自带 CSS 在前，基础样式（含 !important 的
+    # 图片适配规则）在后压过它，漫画图才不会被 EPUB 自带的定宽/定高裁掉。
     page = (
         "<!DOCTYPE html>\n<html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, "
         "initial-scale=1\"><title>%s</title>"
         "<style>%s\n%s</style></head><body>%s</body></html>"
-        % (html.escape(title), EPUB_BASE_CSS, "\n".join(css_parts),
+        % (html.escape(title), "\n".join(css_parts), EPUB_BASE_CSS,
            "\n".join(sections))
     )
     # Lazy-load images: a big book must not fetch every picture up front.
@@ -1257,7 +1264,7 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass
         except Exception as exc:  # noqa: BLE001 - never crash a request
-            sys.stderr.write("manyue: request %s %s failed: %r\n"
+            sys.stderr.write("kele: request %s %s failed: %r\n"
                              % (self.command, self.path, exc))
             try:
                 send_json(self, {"ok": False, "error": str(exc)},
@@ -1578,7 +1585,7 @@ def main():
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     server.daemon_threads = True
     cfg = get_config_copy()
-    print("manyue %s listening on 0.0.0.0:%d data=%s books=%s"
+    print("kele %s listening on 0.0.0.0:%d data=%s books=%s"
           % (VERSION, port, DATA_DIR,
              cfg.get("book_folder") or "(未设置)"), flush=True)
     try:
