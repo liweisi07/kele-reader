@@ -1,0 +1,7 @@
+#!/bin/sh
+# Post-uninstall cleanup: drop a stale PID file so a later reinstall does
+# not mistake a dead PID for a running service. User data (book folder
+# setting, reading progress, covers) stays in the preserved data
+# directory on purpose.
+rm -f "${TRIM_PKGVAR}/manyue.pid"
+exit 0
