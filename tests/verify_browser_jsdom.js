@@ -324,6 +324,7 @@ async function main() {
     check('auth: login admin/admin', loggedIn === true);
     const { books } = await getJson('/api/books');
     const bigPdf = books.find((b) => b.title === '测试漫画-大文件');
+    const smallPdf = books.find((b) => b.title === '测试漫画-小');
     const epub = books.find((b) => b.format === 'epub');
     const txt = books.find((b) => b.title === '测试文章');
     const azw3 = books.find((b) => b.format === 'azw3');
@@ -597,6 +598,103 @@ async function main() {
       check('AZW3: position "已读 0%"', doc.getElementById('pos-label').textContent.includes('已读 0%'),
         `(${doc.getElementById('pos-label').textContent})`);
       check('AZW3: no page JS errors', errors.length === 0, errors.slice(0, 2).join(' | '));
+      dom.window.close();
+    }
+
+    // ---- 1.0.3: 上一章 / 下一章 ----------------------------------------
+    // 同文件夹内按书名顺序跳书。书架默认排序也是书名（localeCompare
+    // zh），所以章节顺序与书架里看到的一致。jsdom 不实现跨页导航
+    // （点按钮会触发 location.href，jsdom 只记一条 Not implemented
+    // 错误而不跳转），因此这里验证三点：按钮存在与置灰状态、指向的
+    // 目标书 id 正确、章序号正确；跳转本身是一行 location.href，
+    // 跳过去后的进度恢复用“直接打开目标书”来验证。
+    const chapterState = (doc) => ({
+      prevDisabled: !!doc.getElementById('prev-chapter-btn').disabled,
+      nextDisabled: !!doc.getElementById('next-chapter-btn').disabled,
+      prevTarget: doc.getElementById('prev-chapter-btn').getAttribute('data-target') || '',
+      nextTarget: doc.getElementById('next-chapter-btn').getAttribute('data-target') || '',
+      label: doc.getElementById('chapter-label').textContent,
+      marker: doc.body.getAttribute('data-test-chapter') || '',
+    });
+    // 漫画/：大文件（第 1/2 章）→ 上一章置灰，下一章指向小 PDF
+    {
+      const { dom, errors } = await loadPage(`${BASE}/read?book=${bigPdf.id}`);
+      const doc = dom.window.document;
+      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '1/2', 30000, 'chapter nav (big pdf)');
+      check('chapter: buttons present on PDF reader',
+        !!doc.getElementById('prev-chapter-btn') && !!doc.getElementById('next-chapter-btn') && !!doc.getElementById('chapter-label'));
+      const s = chapterState(doc);
+      check('chapter: first book in 漫画/ (1/2)', ready && s.marker === '1/2' && s.label.includes('第 1 / 2 章'), `(${s.label}|${s.marker})`);
+      check('chapter: first book prev disabled', s.prevDisabled);
+      check('chapter: first book next -> small PDF', !s.nextDisabled && s.nextTarget === smallPdf.id, `(target ${s.nextTarget.slice(0, 8)})`);
+      check('chapter: no page JS errors (big pdf)', errors.length === 0, errors.slice(0, 2).join(' | '));
+      dom.window.close();
+    }
+    // 漫画/：小 PDF（第 2/2 章）→ 上一章指向大文件，下一章置灰
+    {
+      const { dom, errors } = await loadPage(`${BASE}/read?book=${smallPdf.id}`);
+      const doc = dom.window.document;
+      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '2/2', 30000, 'chapter nav (small pdf)');
+      const s = chapterState(doc);
+      check('chapter: last book in 漫画/ (2/2)', ready && s.marker === '2/2' && s.label.includes('第 2 / 2 章'), `(${s.label}|${s.marker})`);
+      check('chapter: last book prev -> big PDF', !s.prevDisabled && s.prevTarget === bigPdf.id, `(target ${s.prevTarget.slice(0, 8)})`);
+      check('chapter: last book next disabled', s.nextDisabled);
+      check('chapter: no page JS errors (small pdf)', errors.length === 0, errors.slice(0, 2).join(' | '));
+      dom.window.close();
+    }
+    // 小说/：EPUB 是第 3/4 章（书名序：测试文章、测试文章-GBK、
+    // 测试小说、sample-book）→ 上下都指向邻书
+    {
+      const txtGbk = books.find((b) => b.title === '测试文章-GBK');
+      const { dom, errors } = await loadPage(`${BASE}/read?book=${epub.id}`);
+      const doc = dom.window.document;
+      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '3/4', 30000, 'chapter nav (epub)');
+      const s = chapterState(doc);
+      check('chapter: EPUB is 3/4 in 小说/', ready && s.marker === '3/4' && s.label.includes('第 3 / 4 章'), `(${s.label}|${s.marker})`);
+      check('chapter: EPUB prev -> 测试文章-GBK', !s.prevDisabled && s.prevTarget === txtGbk.id, `(target ${s.prevTarget.slice(0, 8)})`);
+      check('chapter: EPUB next -> sample-book (AZW3)', !s.nextDisabled && s.nextTarget === azw3.id, `(target ${s.nextTarget.slice(0, 8)})`);
+      check('chapter: no page JS errors (epub)', errors.length === 0, errors.slice(0, 2).join(' | '));
+      dom.window.close();
+    }
+    // 小说/：TXT 是第 1/4 章 → 上一章置灰；AZW3 是第 4/4 章 → 下一章置灰
+    {
+      const { dom, errors } = await loadPage(`${BASE}/read?book=${txt.id}`);
+      const doc = dom.window.document;
+      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '1/4', 30000, 'chapter nav (txt)');
+      const s = chapterState(doc);
+      check('chapter: TXT reader has chapter buttons', ready && s.marker === '1/4', `(${s.label}|${s.marker})`);
+      check('chapter: TXT first book prev disabled', s.prevDisabled);
+      check('chapter: TXT first book next enabled', !s.nextDisabled);
+      check('chapter: no page JS errors (txt)', errors.length === 0, errors.slice(0, 2).join(' | '));
+      dom.window.close();
+    }
+    {
+      const { dom, errors } = await loadPage(`${BASE}/read?book=${azw3.id}`);
+      const doc = dom.window.document;
+      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '4/4', 30000, 'chapter nav (azw3)');
+      const s = chapterState(doc);
+      check('chapter: AZW3 reader has chapter buttons', ready && s.marker === '4/4', `(${s.label}|${s.marker})`);
+      check('chapter: AZW3 last book next disabled', s.nextDisabled);
+      check('chapter: AZW3 last book prev enabled', !s.prevDisabled);
+      check('chapter: no page JS errors (azw3)', errors.length === 0, errors.slice(0, 2).join(' | '));
+      dom.window.close();
+    }
+    // 跳转后恢复进度：给小 PDF 存第 2 页进度，再打开它（这就是
+    // 点“下一章”后会发生的事：整页跳到 /read?book=<目标>），应
+    // 回到第 2 页而不是从头开始。
+    {
+      const seeded = await fetch(`${BASE}/api/progress`, {
+        method: 'POST', headers: authedHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ book: smallPdf.id, loc: 2, total: 3 }),
+      }).then((r) => r.json()).catch(() => ({}));
+      check('chapter: seed small PDF progress (page 2)', seeded.ok === true, JSON.stringify(seeded).slice(0, 80));
+      const { dom, errors } = await loadPage(`${BASE}/read?book=${smallPdf.id}`);
+      const doc = dom.window.document;
+      const ok = await waitFor(() => doc.body.getAttribute('data-test-pdf'), 60000, 'small pdf load (jump restore)');
+      check('chapter: jump target loads', !!ok);
+      const restored = await waitFor(() => doc.getElementById('pos-label').textContent.includes('第 2 / 3 页'), 30000, 'jump restores page 2');
+      check('chapter: jump restores saved progress (第 2 / 3 页)', restored, `(${doc.getElementById('pos-label').textContent})`);
+      check('chapter: no page JS errors (jump restore)', errors.length === 0, errors.slice(0, 2).join(' | '));
       dom.window.close();
     }
   } finally {
