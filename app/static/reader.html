@@ -35,14 +35,21 @@
 </main>
 
 <footer class="toolbar">
-  <button class="tb-btn" id="prev-btn" type="button">‹ 上一页</button>
-  <span class="pos" id="pos-label">—</span>
-  <button class="tb-btn" id="next-btn" type="button">下一页 ›</button>
-  <button class="tb-btn" id="font-minus" type="button" title="减小字号">A-</button>
-  <button class="tb-btn" id="font-plus" type="button" title="增大字号">A+</button>
-  <button class="tb-btn hidden" id="zoom-out" type="button" title="缩小">－</button>
-  <button class="tb-btn hidden" id="zoom-in" type="button" title="放大">＋</button>
-  <button class="tb-btn hidden" id="zoom-fit" type="button" title="适合宽度">适合宽度</button>
+  <div class="chapter-nav">
+    <button class="tb-btn ch-btn" id="prev-chapter-btn" type="button">‹ 上一章</button>
+    <span class="ch-pos" id="chapter-label">—</span>
+    <button class="tb-btn ch-btn" id="next-chapter-btn" type="button">下一章 ›</button>
+  </div>
+  <div class="page-nav">
+    <button class="tb-btn" id="prev-btn" type="button">‹ 上一页</button>
+    <span class="pos" id="pos-label">—</span>
+    <button class="tb-btn" id="next-btn" type="button">下一页 ›</button>
+    <button class="tb-btn" id="font-minus" type="button" title="减小字号">A-</button>
+    <button class="tb-btn" id="font-plus" type="button" title="增大字号">A+</button>
+    <button class="tb-btn hidden" id="zoom-out" type="button" title="缩小">－</button>
+    <button class="tb-btn hidden" id="zoom-in" type="button" title="放大">＋</button>
+    <button class="tb-btn hidden" id="zoom-fit" type="button" title="适合宽度">适合宽度</button>
+  </div>
 </footer>
 
 <script src="/static/pdf.min.js"></script>
