@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Browser-level verification for manyue, using jsdom + node-canvas.
+/* Browser-level verification for kele, using jsdom + node-canvas.
  * Loads the REAL pages (shelf + 4 readers) from the running server and
  * lets the REAL frontend JS run (PDF.js, shelf/reader logic). EPUB is
  * server-side now (1.0.1): the reader loads a server-extracted page in
@@ -21,7 +21,7 @@ const ROOT = path.join(__dirname, '..');
 const FIXTURES = path.join(ROOT, 'tests', 'fixtures', 'books');
 const PORT = 18098;
 const BASE = `http://127.0.0.1:${PORT}`;
-const DATA_DIR = '/tmp/manyue-jsdom-data';
+const DATA_DIR = '/tmp/kele-jsdom-data';
 
 // 登录态：main() 先调 /api/login 拿到会话 token，页面加载（cookieJar）
 // 与页内 fetch 桥（Cookie 头）都带上它；未登录时页面会跳到登录页。
@@ -35,11 +35,11 @@ async function login() {
   });
   const data = await res.json().catch(() => ({}));
   const setCookie = res.headers.get('set-cookie') || '';
-  const m = /manyue_session=([^;]+)/.exec(setCookie);
+  const m = /kele_session=([^;]+)/.exec(setCookie);
   if (res.ok && data.ok && m) {
     SESSION_TOKEN = m[1];
     cookieJar = new CookieJar();
-    cookieJar.setCookieSync(`manyue_session=${SESSION_TOKEN}; Path=/`, BASE + '/');
+    cookieJar.setCookieSync(`kele_session=${SESSION_TOKEN}; Path=/`, BASE + '/');
     return true;
   }
   return false;
@@ -48,7 +48,7 @@ async function login() {
 // 页内 fetch 桥不走 cookieJar，这里直接给 Node fetch 加 Cookie 头。
 function authedHeaders(extra) {
   const h = { ...(extra || {}) };
-  if (SESSION_TOKEN) h.Cookie = `manyue_session=${SESSION_TOKEN}`;
+  if (SESSION_TOKEN) h.Cookie = `kele_session=${SESSION_TOKEN}`;
   return h;
 }
 
@@ -84,7 +84,7 @@ process.on('uncaughtException', (e) => {
 function getJson(pathname) {
   return new Promise((resolve, reject) => {
     const headers = {};
-    if (SESSION_TOKEN) headers.Cookie = `manyue_session=${SESSION_TOKEN}`;
+    if (SESSION_TOKEN) headers.Cookie = `kele_session=${SESSION_TOKEN}`;
     http.get(BASE + pathname, { headers }, (res) => {
       let data = '';
       res.on('data', (c) => (data += c));
@@ -100,10 +100,10 @@ function startServer() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(path.join(DATA_DIR, 'config.json'),
     JSON.stringify({ book_folder: FIXTURES }));
-  const env = { ...process.env, MANYUE_DATA_DIR: DATA_DIR, MANYUE_PORT: String(PORT) };
+  const env = { ...process.env, KELE_DATA_DIR: DATA_DIR, KELE_PORT: String(PORT) };
   // Server stderr goes to a file: a crash must leave evidence (spawn()
   // defaults to piped stdio that nobody reads, so tracebacks vanish).
-  const serverLog = fs.openSync('/tmp/manyue-jsdom-server.log', 'w');
+  const serverLog = fs.openSync('/tmp/kele-jsdom-server.log', 'w');
   const proc = spawn('python3', [path.join(ROOT, 'app', 'app.py')],
     { env, stdio: ['ignore', 'ignore', serverLog] });
   return new Promise((resolve, reject) => {
@@ -164,6 +164,17 @@ async function loadPage(url, setup) {
       // page scripts load so the polyfill leaves it alone.
       window.setImmediate = (fn, ...args) => window.setTimeout(() => fn(...args), 0);
       window.clearImmediate = (id) => window.clearTimeout(id);
+      // Scrolling: jsdom has no layout, so scrollIntoView/scrollTo are
+      // either missing or log "Not implemented" jsdomErrors. The app
+      // calls them on settings toggle / back-home / PDF page jumps;
+      // no-op them so those paths run cleanly in jsdom.
+      window.scrollTo = () => {};
+      window.scrollBy = () => {};
+      if (window.Element && window.Element.prototype) {
+        window.Element.prototype.scrollIntoView = function () {};
+        window.Element.prototype.scrollTo = function () {};
+        window.Element.prototype.scrollBy = function () {};
+      }
       // URL.createObjectURL: jsdom does not implement it, but epub.js
       // needs it to substitute chapter resources (images/CSS) with blob
       // URLs. A dummy URL is enough here: the chapter TEXT is written
@@ -180,7 +191,7 @@ async function loadPage(url, setup) {
         let nodeInit = { ...(init || {}) };
         if (typeof SESSION_TOKEN === 'string' && SESSION_TOKEN) {
           nodeInit.headers = { ...(nodeInit.headers || {}),
-            Cookie: 'manyue_session=' + SESSION_TOKEN };
+            Cookie: 'kele_session=' + SESSION_TOKEN };
         }
         if (init && init.signal) {
           const ac = new AbortController();
@@ -245,8 +256,8 @@ async function loadPage(url, setup) {
       // separate realm: patch it too as soon as it appears, or the
       // rendition's layout loop throws inside requestAnimationFrame.
       const patchFrameWindow = (fw) => {
-        if (!fw || fw.__manyuePatched) return;
-        fw.__manyuePatched = true;
+        if (!fw || fw.__kelePatched) return;
+        fw.__kelePatched = true;
         const rect = () => ({ top: 0, bottom: 100, left: 0, right: 390, width: 390, height: 100, x: 0, y: 0 });
         if (fw.Range && fw.Range.prototype) {
           fw.Range.prototype.getBoundingClientRect = rect;
@@ -383,6 +394,45 @@ async function main() {
       }, 30000, 'shelf cover');
       check('shelf: PDF cover generated + shown', coverOk);
       check('shelf: no page JS errors (after covers)', errors.length === 0, errors.slice(0, 2).join(' | '));
+      // ---- 1.0.2: folders collapsed by default (Issue 5) --------------
+      const anyOpen = [...doc.querySelectorAll('details.folder-group')].some((d) => d.hasAttribute('open'));
+      check('shelf: folders collapsed by default', !anyOpen);
+      // ---- 1.0.2: sort dropdown works for PDFs (Issue 4) --------------
+      // Default (title) order in 小说: sample-book first. By size (largest
+      // first) 测试文章.txt (170KB) must come first.
+      const sortSel = doc.getElementById('sort-select');
+      check('shelf: sort select present', !!sortSel);
+      // Re-query the group each time: renderGrid() replaces shelfEl
+      // innerHTML, so a captured element goes stale after a sort change.
+      const titlesIn = (name) => {
+        const g = [...doc.querySelectorAll('details.folder-group')].find((el) => el.querySelector('summary').textContent.includes(name));
+        return g ? [...g.querySelectorAll('.book .meta .t')].map((el) => el.textContent) : [];
+      };
+      // Title sort (localeCompare zh): 测试文章, 测试文章-GBK, 测试小说,
+      // sample-book. Size sort (largest first): 测试文章, 测试文章-GBK,
+      // sample-book, 测试小说 — differs in positions 3-4.
+      const titleOrder = titlesIn('小说');
+      check('shelf: default sort (title) order in 小说',
+        titleOrder.join('|') === '测试文章|测试文章-GBK|测试小说：满月之下|sample-book',
+        `(${titleOrder.join('|')})`);
+      sortSel.value = 'size';
+      sortSel.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      const sizeOk = await waitFor(() => titlesIn('小说').join('|') === '测试文章|测试文章-GBK|sample-book|测试小说：满月之下', 5000, 'sort by size');
+      check('shelf: sort by size reorders 小说', sizeOk, `(${titlesIn('小说').join('|')})`);
+      check('shelf: sort by size keeps big PDF first in 漫画', titlesIn('漫画')[0] === '测试漫画-大文件', `(${titlesIn('漫画').join('|')})`);
+      sortSel.value = 'title';
+      sortSel.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      // ---- 1.0.2: settings back-home button (Issue 1) ----------------
+      doc.getElementById('settings-link').click();
+      const setupShown = !doc.getElementById('setup-card').classList.contains('hidden');
+      const accountShown = !doc.getElementById('account-card').classList.contains('hidden');
+      check('settings: cards shown after 设置', setupShown && accountShown);
+      const backBtn = doc.querySelector('#setup-card .back-home-btn');
+      check('settings: back-home button present', !!backBtn);
+      backBtn.click();
+      check('settings: back-home hides both cards',
+        doc.getElementById('setup-card').classList.contains('hidden') &&
+        doc.getElementById('account-card').classList.contains('hidden'));
       dom.window.close();
     }
 
@@ -413,6 +463,38 @@ async function main() {
       dom.window.close();
     }
 
+    // ---- 1.0.2: PDF progress saved on open (Issue 3) -------------------
+    // The small PDF has NO seeded progress. Opening it must create a
+    // progress entry (saved on open) so it shows up in history — before
+    // 1.0.2, scroll-only PDFs never saved unless the user clicked
+    // 上一页/下一页.
+    {
+      const smallPdf = books.find((b) => b.title === '测试漫画-小');
+      const { dom, errors } = await loadPage(`${BASE}/read?book=${smallPdf.id}`);
+      const doc = dom.window.document;
+      const loaded = await waitFor(() => doc.body.getAttribute('data-test-pdf'), 60000, 'small pdf load');
+      check('PDF: small PDF loaded', !!loaded);
+      // save-on-open is debounced (2000ms) + a beat after; poll the API.
+      // Note: GET /api/progress returns {progress: {id: {loc,total}}}.
+      let savedOk = false;
+      for (let i = 0; i < 30 && !savedOk; i++) {
+        try {
+          const rr = await fetch(`${BASE}/api/progress`, { headers: authedHeaders() });
+          const pp = await rr.json();
+          const m = (pp && pp.progress) || {};
+          savedOk = !!(m[smallPdf.id] && typeof m[smallPdf.id].loc === 'number');
+        } catch (e) { /* not yet */ }
+        if (!savedOk) await new Promise((r) => setTimeout(r, 500));
+      }
+      check('PDF: progress saved on open (appears in /api/progress)', savedOk);
+      const r = await fetch(`${BASE}/api/progress`, { headers: authedHeaders() });
+      const prog = await r.json();
+      const entry = ((prog && prog.progress) || {})[smallPdf.id] || {};
+      check('PDF: saved progress has loc/total', entry.loc === 1 && entry.total >= 1, JSON.stringify(entry));
+      check('PDF: no page JS errors (small pdf)', errors.length === 0, errors.slice(0, 2).join(' | '));
+      dom.window.close();
+    }
+
     // ---- EPUB reader (server-side, 1.0.1) -----------------------------
     // EPUB is now a server-extracted page in a single iframe
     // (#epub-frame), not client-side epub.js. The browser only fetches
@@ -436,6 +518,21 @@ async function main() {
       check('EPUB: title rendered in iframe', coverOk, `(len ${frameText().length})`);
       check('EPUB: chapter 1 text in iframe', frameText().includes('月亮升起来的时候'));
       check('EPUB: chapter 2 text in iframe', frameText().includes('第二章'));
+      // ---- 1.0.2: manga images fit width (Issue 2) --------------------
+      // The iframe page must carry the base CSS with !important image
+      // rules AFTER the EPUB's own CSS, so manga pages are never clipped.
+      const frameCss = () => {
+        try {
+          const fd = frame && frame.contentDocument;
+          const st = fd && fd.querySelector('style');
+          return (st && st.textContent) || '';
+        } catch (e) { return ''; }
+      };
+      const css = frameCss();
+      const idxEpub = css.indexOf('font-size:18px');
+      const idxBase = css.indexOf('max-width:100%!important');
+      check('EPUB: base CSS after EPUB CSS in iframe', idxEpub >= 0 && idxBase > idxEpub, `(${idxEpub},${idxBase})`);
+      check('EPUB: img height:auto!important in iframe', css.includes('height:auto!important'));
       check('EPUB: no page JS errors', errors.length === 0, errors.slice(0, 2).join(' | '));
       dom.window.close();
     }
