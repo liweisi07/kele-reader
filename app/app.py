@@ -54,7 +54,7 @@ STATIC_DIR = os.path.join(APP_DIR, "static")
 sys.path.insert(0, VENDOR_DIR)
 sys.path.insert(0, APP_DIR)
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 APPNAME = "kele"
 DEFAULT_PORT = 18090
 SESSION_COOKIE = "kele_session"
@@ -699,7 +699,9 @@ EPUB_BASE_CSS = (
     "html{font-size:18px}"
     "body{font-size:1rem;line-height:1.8;color:#262626;"
     "background:#f7f3ea;max-width:720px;margin:0 auto;"
-    "padding:16px 18px;font-family:system-ui,-apple-system,"
+    # 底部留白 180px：阅读器底部是两行固定工具栏（章节行+翻页行），
+    # 没有这个留白，书的最后一屏会被工具栏盖住。
+    "padding:16px 18px 180px;font-family:system-ui,-apple-system,"
     "\"PingFang SC\",\"Microsoft YaHei\",sans-serif}"
     # 漫画图必须完整显示：强制按宽度适配、保持宽高比，压过 EPUB 自带
     # 的定宽/定高/绝对定位样式（有些漫画 EPUB 会给 img 写死尺寸或
