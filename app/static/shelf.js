@@ -1,4 +1,4 @@
-/* 满月阅读 — 书架逻辑 */
+/* 满月阅读 — 书架逻辑：文件夹分组、每本进度、阅读历史 */
 (function () {
   'use strict';
 
@@ -9,7 +9,7 @@
     }
   } catch (e) { /* 忽略 */ }
 
-  var grid = document.getElementById('grid');
+  var shelfEl = document.getElementById('shelf');
   var emptyEl = document.getElementById('empty');
   var errorBox = document.getElementById('error-box');
   var countEl = document.getElementById('book-count');
@@ -17,11 +17,19 @@
   var setupCard = document.getElementById('setup-card');
   var folderInput = document.getElementById('folder-input');
   var setupStatus = document.getElementById('setup-status');
+  var accountCard = document.getElementById('account-card');
+  var curPassEl = document.getElementById('cur-pass');
+  var newUserEl = document.getElementById('new-user');
+  var newPassEl = document.getElementById('new-pass');
+  var accountStatus = document.getElementById('account-status');
   var continueStrip = document.getElementById('continue-strip');
+  var historySection = document.getElementById('history-section');
+  var historyList = document.getElementById('history-list');
   var toastEl = document.getElementById('toast');
 
   var books = [];
   var booksById = {};
+  var progressById = {};   // bookId -> {loc, total, updated}
   var toastTimer = null;
   var coverDone = {};      // 本次加载已尝试过的书
   var coverQueue = [];     // 待生成封面的书 id
@@ -47,11 +55,30 @@
     });
   }
 
+  // 会话过期（401）直接回登录页，登录后按 next 回来。
+  function redirectToLogin() {
+    window.location.href = '/login?next=' +
+      encodeURIComponent(window.location.pathname + window.location.search);
+  }
+
+  // 带鉴权检查的 fetch：401 说明会话过期，跳登录页并中断本次调用。
+  function apiFetch(url, opts) {
+    return fetch(url, opts).then(function (r) {
+      if (r.status === 401) {
+        redirectToLogin();
+        var err = new Error('unauthorized');
+        err.unauthorized = true;
+        throw err;
+      }
+      return r;
+    });
+  }
+
   function fmtBadge(fmt) { return (fmt || '').toUpperCase(); }
 
-  /* ---------- 加载书库 ---------- */
+  /* ---------- 加载书库 / 进度 ---------- */
   function loadBooks() {
-    return fetch('/api/books')
+    return apiFetch('/api/books')
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: '服务器返回异常' }; }); })
       .then(function (data) {
         if (data.error) { showError(data.error); }
@@ -59,16 +86,33 @@
         booksById = {};
         books.forEach(function (b) { booksById[b.id] = b; });
         renderGrid();
+        renderHistory();
         return books;
       })
-      .catch(function () {
+      .catch(function (e) {
+        if (e && e.unauthorized) return [];
         showError('加载书库失败，请检查网络或稍后再试');
         return [];
       });
   }
 
+  function loadProgress() {
+    return apiFetch('/api/progress')
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (data) {
+        progressById = data.progress || {};
+        renderGrid();
+        renderHistory();
+        return progressById;
+      })
+      .catch(function (e) {
+        if (e && e.unauthorized) return {};
+        return {};
+      });
+  }
+
   function loadSettings() {
-    return fetch('/api/settings')
+    return apiFetch('/api/settings')
       .then(function (r) { return r.json().catch(function () { return {}; }); })
       .then(function (data) {
         var folder = data.book_folder || '';
@@ -81,34 +125,29 @@
           setupCard.classList.add('hidden');
         }
       })
-      .catch(function () { setupCard.classList.remove('hidden'); });
+      .catch(function (e) {
+        if (e && e.unauthorized) return;
+        setupCard.classList.remove('hidden');
+      });
   }
 
-  /* ---------- 继续阅读 ---------- */
-  function loadContinue() {
-    fetch('/api/progress')
-      .then(function (r) { return r.json().catch(function () { return {}; }); })
-      .then(function (data) {
-        var progress = data.progress || {};
-        var ids = Object.keys(progress);
-        if (!ids.length) return;
-        // 取最近更新的一条
-        var best = null, bestTime = '';
-        ids.forEach(function (id) {
-          var p = progress[id];
-          var t = p.updated || '';
-          if (!best || t >= bestTime) { best = { id: id, p: p }; bestTime = t; }
-        });
-        if (!best) return;
-        var book = booksById[best.id];
-        var title = book ? book.title : '未知书籍';
-        var pos = formatPosition(best.p, book ? book.format : '');
-        document.getElementById('continue-title').textContent = title;
-        document.getElementById('continue-pos').textContent = pos;
-        document.getElementById('continue-link').href = '/read?book=' + encodeURIComponent(best.id);
-        continueStrip.classList.remove('hidden');
-      })
-      .catch(function () { /* 没有进度也不影响书架 */ });
+  /* ---------- 进度口径（与阅读器一致） ---------- */
+  // 返回 0..100 的百分比；算不出来的返回 null（不显示进度条）。
+  // PDF/TXT：loc/total；EPUB/AZW3：loc 是 0..1 的滚动小数。
+  // 旧版 EPUB 存的是 CFI 字符串，算不出百分比，返回 null。
+  function progressPct(book, p) {
+    if (!p) return null;
+    var fmt = (book.format || '').toLowerCase();
+    var loc = p.loc, total = p.total;
+    if (fmt === 'pdf' || fmt === 'txt') {
+      if (typeof loc !== 'number' || typeof total !== 'number' || total <= 0) return null;
+      return Math.max(0, Math.min(100, Math.round(loc / total * 100)));
+    }
+    if (fmt === 'epub' || fmt === 'azw3') {
+      if (typeof loc !== 'number') return null;
+      return Math.max(0, Math.min(100, Math.round(loc * 100)));
+    }
+    return null;
   }
 
   // 进度里只存 loc/total/updated，格式从书库里取
@@ -121,7 +160,7 @@
     if (fmt === 'txt' && typeof loc === 'number') {
       return total ? ('已读 ' + Math.round(loc / total * 100) + '%') : '上次读到一半';
     }
-    if (fmt === 'azw3' && typeof loc === 'number') {
+    if ((fmt === 'azw3' || fmt === 'epub') && typeof loc === 'number') {
       return '已读 ' + Math.round(loc * 100) + '%';
     }
     if (fmt === 'epub') {
@@ -130,38 +169,146 @@
     return '继续阅读';
   }
 
-  /* ---------- 渲染书架 ---------- */
+  // 供历史列表用的进度文字：能算百分比就给百分比，否则给位置描述
+  function progressText(book, p) {
+    var pct = progressPct(book, p);
+    if (pct !== null) return '已读 ' + pct + '%';
+    return formatPosition(p, book.format);
+  }
+
+  // updated 是 "YYYY-MM-DD HH:MM:SS"，友好显示：今天/昨天/月日
+  function fmtTime(updated) {
+    if (!updated) return '';
+    var m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(updated);
+    if (!m) return updated;
+    var today = new Date();
+    var y = today.getFullYear(), mo = today.getMonth() + 1, d = today.getDate();
+    var uy = parseInt(m[1], 10), um = parseInt(m[2], 10), ud = parseInt(m[3], 10);
+    var hm = m[4] + ':' + m[5];
+    if (uy === y && um === mo && ud === d) return '今天 ' + hm;
+    var yday = new Date(y, mo - 1, d - 1);
+    if (uy === yday.getFullYear() && um === yday.getMonth() + 1 && ud === yday.getDate()) return '昨天 ' + hm;
+    return m[2] + '-' + m[3] + ' ' + hm;
+  }
+
+  /* ---------- 继续阅读 ---------- */
+  function loadContinue() {
+    var ids = Object.keys(progressById);
+    if (!ids.length) return;
+    // 取最近更新的一条
+    var best = null, bestTime = '';
+    ids.forEach(function (id) {
+      var p = progressById[id];
+      var t = p.updated || '';
+      if (!best || t >= bestTime) { best = { id: id, p: p }; bestTime = t; }
+    });
+    if (!best) return;
+    var book = booksById[best.id];
+    var title = book ? book.title : '未知书籍';
+    var pos = formatPosition(best.p, book ? book.format : '');
+    document.getElementById('continue-title').textContent = title;
+    document.getElementById('continue-pos').textContent = pos;
+    document.getElementById('continue-link').href = '/read?book=' + encodeURIComponent(best.id);
+    continueStrip.classList.remove('hidden');
+  }
+
+  /* ---------- 阅读历史 ---------- */
+  function renderHistory() {
+    var entries = [];
+    Object.keys(progressById).forEach(function (id) {
+      var p = progressById[id];
+      var book = booksById[id];
+      if (!book || !p || !p.updated) return;
+      entries.push({ book: book, p: p });
+    });
+    entries.sort(function (a, b) {
+      return a.p.updated < b.p.updated ? 1 : (a.p.updated > b.p.updated ? -1 : 0);
+    });
+    var shown = entries.slice(0, 20);
+    if (!shown.length) {
+      historySection.classList.add('hidden');
+      historyList.innerHTML = '';
+      return;
+    }
+    historySection.classList.remove('hidden');
+    historyList.innerHTML = shown.map(function (e) {
+      var b = e.book, p = e.p;
+      return '<a class="history-item" href="/read?book=' + encodeURIComponent(b.id) + '">' +
+        '<span class="history-title">' + esc(b.title || '未命名') + '</span>' +
+        '<span class="history-pos">' + esc(progressText(b, p)) + '</span>' +
+        '<span class="history-time">' + esc(fmtTime(p.updated)) + '</span></a>';
+    }).join('');
+  }
+
+  /* ---------- 渲染书架（按文件夹分组） ---------- */
+  function bookCardHtml(b) {
+    var coverHtml;
+    if (b.cover_url) {
+      coverHtml = '<img src="' + esc(b.cover_url) + '" alt="" loading="lazy">';
+    } else {
+      var first = (b.title || '?').trim().charAt(0) || '?';
+      coverHtml = '<div class="tile"><div class="first-char">' + esc(first) + '</div>' +
+        '<div class="tile-title">' + esc(b.title || '') + '</div></div>';
+    }
+    var folderHtml = b.folder ? '<div class="folder">' + esc(b.folder) + '</div>' : '';
+    var progHtml = '';
+    var pct = progressPct(b, progressById[b.id]);
+    if (pct !== null) {
+      progHtml = '<div class="prog"><div class="prog-fill" style="width:' + pct + '%"></div></div>' +
+        '<div class="prog-text">已读 ' + pct + '%</div>';
+    }
+    return '<div class="book" data-id="' + esc(b.id) + '" data-need-cover="' +
+      ((!b.cover_url && b.format === 'pdf') ? '1' : '0') + '">' +
+      '<div class="cover">' + coverHtml + '</div>' +
+      '<div class="meta"><div class="t">' + esc(b.title || '未命名') + '</div>' +
+      '<div class="sub"><span class="badge ' + esc((b.format || '').toLowerCase()) + '">' + esc(fmtBadge(b.format)) + '</span>' +
+      '<span>' + esc(b.size_text || '') + '</span></div>' + folderHtml + progHtml + '</div></div>';
+  }
+
   function renderGrid() {
     var q = (searchInput.value || '').trim().toLowerCase();
     var list = books.filter(function (b) {
       return !q || (b.title || '').toLowerCase().indexOf(q) !== -1;
     });
     countEl.textContent = list.length ? ('共 ' + list.length + ' 本') : '';
-    emptyEl.classList.toggle('hidden', list.length > 0 || books.length > 0);
-    if (!books.length) { grid.innerHTML = ''; emptyEl.classList.remove('hidden'); return; }
-    if (!list.length) { grid.innerHTML = ''; emptyEl.classList.remove('hidden'); emptyEl.innerHTML = '没有找到匹配的书'; return; }
+    if (!books.length) {
+      shelfEl.innerHTML = '';
+      emptyEl.classList.remove('hidden');
+      emptyEl.innerHTML = '这里还没有书<br><span style="font-size:13px">先在设置里填好书库文件夹，再点“重新扫描”</span>';
+      return;
+    }
+    if (!list.length) {
+      shelfEl.innerHTML = '';
+      emptyEl.classList.remove('hidden');
+      emptyEl.innerHTML = '没有找到匹配的书';
+      return;
+    }
     emptyEl.classList.add('hidden');
-
-    grid.innerHTML = list.map(function (b) {
-      var coverHtml;
-      if (b.cover_url) {
-        coverHtml = '<img src="' + esc(b.cover_url) + '" alt="" loading="lazy">';
-      } else {
-        var first = (b.title || '?').trim().charAt(0) || '?';
-        coverHtml = '<div class="tile"><div class="first-char">' + esc(first) + '</div>' +
-          '<div class="tile-title">' + esc(b.title || '') + '</div></div>';
-      }
-      var folderHtml = b.folder ? '<div class="folder">' + esc(b.folder) + '</div>' : '';
-      return '<div class="book" data-id="' + esc(b.id) + '" data-need-cover="' +
-        ((!b.cover_url && b.format === 'pdf') ? '1' : '0') + '">' +
-        '<div class="cover">' + coverHtml + '</div>' +
-        '<div class="meta"><div class="t">' + esc(b.title || '未命名') + '</div>' +
-        '<div class="sub"><span class="badge ' + esc((b.format || '').toLowerCase()) + '">' + esc(fmtBadge(b.format)) + '</span>' +
-        '<span>' + esc(b.size_text || '') + '</span></div>' + folderHtml + '</div></div>';
+    // 按文件夹分组：文件夹按字母排，根目录（""）在最前；组内书按书名排
+    // （后端已按 folder/title 排好，这里只分组不重排，保持稳定）。
+    var groups = {};
+    var order = [];
+    list.forEach(function (b) {
+      var f = b.folder || '';
+      if (!groups[f]) { groups[f] = []; order.push(f); }
+      groups[f].push(b);
+    });
+    order.sort(function (a, b) {
+      if (a === '') return -1;
+      if (b === '') return 1;
+      return a < b ? -1 : (a > b ? 1 : 0);
+    });
+    shelfEl.innerHTML = order.map(function (f) {
+      var items = groups[f];
+      var label = f === '' ? '根目录' : f;
+      return '<details class="folder-group" open>' +
+        '<summary><span class="folder-name">' + esc(label) + '</span>' +
+        '<span class="folder-count">' + items.length + ' 本</span></summary>' +
+        '<div class="grid">' + items.map(bookCardHtml).join('') + '</div></details>';
     }).join('');
 
-    // 点书进阅读器（事件委托）
-    grid.querySelectorAll('.book').forEach(function (el) {
+    // 点书进阅读器
+    shelfEl.querySelectorAll('.book').forEach(function (el) {
       el.addEventListener('click', function () {
         window.location.href = '/read?book=' + encodeURIComponent(el.getAttribute('data-id'));
       });
@@ -183,7 +330,7 @@
         if (id && !coverDone[id]) { coverQueue.push(id); pumpCoverQueue(); }
       });
     }, { rootMargin: '200px' });
-    grid.querySelectorAll('.book[data-need-cover="1"]').forEach(function (el) {
+    shelfEl.querySelectorAll('.book[data-need-cover="1"]').forEach(function (el) {
       coverObserver.observe(el);
     });
   }
@@ -226,7 +373,9 @@
       .then(function (r) { return r.json().catch(function () { return {}; }); })
       .then(function (res) {
         if (!res.ok && res.error) return; // 封面失败不打扰用户
-        var tile = grid.querySelector('.book[data-id="' + CSS.escape(id) + '"] .cover');
+        // 书 id 恒为 16 位十六进制（book_id_for），可直接拼进属性选择器，
+        // 不用 CSS.escape（jsdom 没有 CSS 对象，调它会抛错）。
+        var tile = shelfEl.querySelector('.book[data-id="' + id + '"] .cover');
         if (tile) {
           tile.innerHTML = '';
           var img = document.createElement('img');
@@ -244,7 +393,7 @@
     var folder = folderInput.value.trim();
     if (!folder) { setupStatus.textContent = '请先填写书库文件夹路径'; return; }
     setupStatus.textContent = '保存中…';
-    fetch('/api/settings', {
+    apiFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ book_folder: folder })
@@ -259,12 +408,53 @@
           setupStatus.textContent = data.error || '保存失败';
         }
       })
-      .catch(function () { setupStatus.textContent = '保存失败，请检查网络'; });
+      .catch(function (e) {
+        if (e && e.unauthorized) return;
+        setupStatus.textContent = '保存失败，请检查网络';
+      });
+  });
+
+  // 修改账号密码：只改 auth 段，书库与进度不动；改完立即生效。
+  document.getElementById('save-account-btn').addEventListener('click', function () {
+    var cur = curPassEl.value;
+    var nu = newUserEl.value.trim();
+    var np = newPassEl.value;
+    if (!cur) { accountStatus.textContent = '请先输入当前密码'; return; }
+    if (!np) { accountStatus.textContent = '新密码不能为空'; return; }
+    accountStatus.textContent = '保存中…';
+    apiFetch('/api/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: cur, new_username: nu, new_password: np })
+    })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: '服务器返回异常' }; }); })
+      .then(function (data) {
+        if (data.ok) {
+          accountStatus.textContent = '已保存' + (nu ? ('，账号已改为 ' + nu) : '，新密码已生效');
+          curPassEl.value = '';
+          newUserEl.value = '';
+          newPassEl.value = '';
+          showToast('账号密码已保存');
+        } else {
+          accountStatus.textContent = data.error || '保存失败';
+        }
+      })
+      .catch(function (e) {
+        if (e && e.unauthorized) return;
+        accountStatus.textContent = '保存失败，请检查网络';
+      });
+  });
+
+  document.getElementById('logout-btn').addEventListener('click', function () {
+    fetch('/api/logout', { method: 'POST' })
+      .catch(function () {})
+      .finally(function () { window.location.href = '/login'; });
   });
 
   document.getElementById('settings-link').addEventListener('click', function (e) {
     e.preventDefault();
     setupCard.classList.remove('hidden');
+    accountCard.classList.remove('hidden');
     setupCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
     folderInput.focus();
   });
@@ -273,7 +463,7 @@
     var btn = this;
     btn.disabled = true;
     btn.textContent = '扫描中…';
-    fetch('/api/rescan', { method: 'POST' })
+    apiFetch('/api/rescan', { method: 'POST' })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: '服务器返回异常' }; }); })
       .then(function (data) {
         if (data.ok) {
@@ -284,7 +474,10 @@
           showError(data.error || '重新扫描失败');
         }
       })
-      .catch(function () { showError('重新扫描失败，请检查网络'); })
+      .catch(function (e) {
+        if (e && e.unauthorized) return;
+        showError('重新扫描失败，请检查网络');
+      })
       .finally(function () { btn.disabled = false; btn.textContent = '重新扫描'; });
   });
 
@@ -292,5 +485,5 @@
 
   /* ---------- 启动 ---------- */
   loadSettings();
-  loadBooks().then(function () { loadContinue(); });
+  loadBooks().then(loadProgress).then(loadContinue);
 })();
