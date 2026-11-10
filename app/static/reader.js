@@ -44,6 +44,23 @@
   }
 
   /* ---------- 进度保存（2 秒节流 + 页面隐藏时保存） ---------- */
+  // 会话过期（401）直接回登录页，登录后按 next 回到这本书。
+  function redirectToLogin() {
+    window.location.href = '/login?next=' +
+      encodeURIComponent(window.location.pathname + window.location.search);
+  }
+  function apiFetch(url, opts) {
+    return fetch(url, opts).then(function (r) {
+      if (r.status === 401) {
+        redirectToLogin();
+        var err = new Error('unauthorized');
+        err.unauthorized = true;
+        throw err;
+      }
+      return r;
+    });
+  }
+
   function saveProgress(loc, total) {
     if (!bookId) return;
     var key = JSON.stringify([loc, total]);
@@ -54,6 +71,8 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ book: bookId, loc: loc, total: total }),
       keepalive: true
+    }).then(function (r) {
+      if (r.status === 401) redirectToLogin();
     }).catch(function () { /* 保存失败不打扰阅读 */ });
   }
   var pendingSave = null;
@@ -80,7 +99,7 @@
     showError('没有指定要打开的书');
     setTitle('满月阅读');
   } else {
-    fetch('/api/books')
+    apiFetch('/api/books')
       .then(function (r) { return r.json().catch(function () { return { books: [] }; }); })
       .then(function (data) {
         var list = Array.isArray(data.books) ? data.books : [];
@@ -92,23 +111,30 @@
         setTitle(book.title || '未命名');
         badgeEl.textContent = (book.format || '').toUpperCase();
         badgeEl.classList.add((book.format || '').toLowerCase());
-        return fetch('/api/progress')
+        return apiFetch('/api/progress')
           .then(function (r) { return r.json().catch(function () { return {}; }); })
-          .catch(function () { return {}; })
+          .catch(function (e) {
+            if (e && e.unauthorized) return {};
+            return {};
+          })
           .then(function (pdata) {
             var p = (pdata.progress || {})[bookId];
             if (p) { savedLoc = p.loc; savedTotal = p.total; }
             openBook();
           });
       })
-      .catch(function () { showError('打开失败，请检查网络后重试'); });
+      .catch(function (e) {
+        if (e && e.unauthorized) return;
+        showError('打开失败，请检查网络后重试');
+      });
   }
 
   function openBook() {
     var fmt = (book.format || '').toLowerCase();
+    // EPUB 由 initEpub 自己管理加载提示（解包要几秒，不能先藏起来留白屏）
+    if (fmt === 'epub') { initEpub(); return; }
     loadingEl.classList.add('hidden');
     if (fmt === 'pdf') initPdf();
-    else if (fmt === 'epub') initEpub();
     else if (fmt === 'txt') initTxt();
     else if (fmt === 'azw3') initAzw3();
     else showError('暂不支持这种格式');
@@ -271,44 +297,97 @@
   }
 
   /* ================= EPUB ================= */
-  var epubBook = null, epubRendition = null;
-  var epubFontPx = 18;
+  // 服务端解包（与 AZW3 同一套路）：浏览器只拉解包后的 HTML 和滚动
+  // 到的图片，不用先下载、解压整本 EPUB。99 MB 的大书也能秒开。
+  // 进度存为 0..1 的滚动小数（与 AZW3 一致）；旧版存的 CFI 字符串
+  // 无法对应到滚动位置，忽略，从头开始读。
+  var epubFrame = null;
+  var epubScrollTimer = null;
+  var epubRestored = false;
 
   function initEpub() {
-    document.getElementById('epub-viewer').classList.remove('hidden');
-    if (typeof ePub === 'undefined') { showError('EPUB 阅读组件加载失败'); return; }
+    epubFrame = document.getElementById('epub-frame');
+    epubFrame.classList.remove('hidden');
+    epubFrame.style.height = '100%';
+    // 服务端解包大文件要几秒，加载状态要如实显示，不要白屏。
+    var sizeText = (book && book.size_text) ? ('（' + book.size_text + '）') : '';
+    loadingEl.textContent = '正在解包 EPUB' + sizeText + '，请稍候…';
+    loadingEl.classList.remove('hidden');
     setPos('加载中…');
-    // 注意：不能直接把 /api/file/<id> 传给 ePub——它没有 .epub 后缀，
-    // epub.js 会把它当成已解包的目录去取 META-INF/container.xml（404）。
-    // 先自己取回 ArrayBuffer 再传，epub.js 即按打包文件处理。
-    fetch('/api/file/' + encodeURIComponent(bookId))
-      .then(function (r) {
-        if (!r.ok) throw new Error('http ' + r.status);
-        return r.arrayBuffer();
-      })
-      .then(function (buf) {
-        try {
-          epubBook = ePub(buf);
-        } catch (e) { showError('这本 EPUB 打不开'); return; }
-        epubRendition = epubBook.renderTo('epub-viewer', {
-          width: '100%', height: '100%', flow: 'scrolled', manager: 'continuous'
-        });
-        epubRendition.themes.fontSize(epubFontPx + 'px');
-        var displayed = (typeof savedLoc === 'string' && savedLoc) ? epubRendition.display(savedLoc) : epubRendition.display();
-        displayed.catch(function () { epubRendition.display(); });
-        epubRendition.on('relocated', function (location) {
-          document.body.setAttribute('data-test-epub', '1');
-          var cfi = location && location.start ? location.start.cfi : null;
-          var page = location && location.start ? location.start.displayed.page : null;
-          var total = location && location.start ? location.start.displayed.total : null;
-          if (page && total) setPos('第 ' + page + ' / ' + total + ' 页');
-          else if (page) setPos('第 ' + page + ' 页');
-          if (cfi) scheduleSave(cfi, total || 0);
-        });
-        epubBook.ready.catch(function () { showError('这本 EPUB 打不开'); });
-      })
-      .catch(function () { showError('这本 EPUB 打不开'); });
+    var loaded = false;
+    epubFrame.addEventListener('load', function () {
+      loaded = true;
+      loadingEl.classList.add('hidden');
+      var doc = null;
+      try { doc = epubFrame.contentDocument || (epubFrame.contentWindow && epubFrame.contentWindow.document); } catch (e) { doc = null; }
+      if (!doc) { showEpubError(); return; }
+      // 后端出错时 iframe 里是错误页（带 data-epub-error）
+      var errEl = null;
+      try { errEl = doc.querySelector('[data-epub-error]'); } catch (e) { errEl = null; }
+      if (errEl) { showEpubError(); return; }
+      var bodyText = '';
+      try { bodyText = (doc.body && doc.body.innerText || '').trim(); } catch (e) { bodyText = ''; }
+      if (bodyText && (bodyText.indexOf('"ok":false') !== -1 || bodyText.indexOf('"ok": false') !== -1)) {
+        showEpubError();
+        return;
+      }
+      var de = doc.documentElement;
+      var scrollEl = doc.scrollingElement || de;
+      document.body.setAttribute('data-test-epub', '1');
+      // 恢复滚动位置（只认新模型存的小数；旧 CFI 忽略）
+      if (!epubRestored && typeof savedLoc === 'number' && savedLoc > 0 && savedLoc < 1) {
+        epubRestored = true;
+        var max = scrollEl.scrollHeight - scrollEl.clientHeight;
+        if (max > 0) scrollEl.scrollTop = Math.round(savedLoc * max);
+      }
+      updateEpubPos();
+      // 监听 iframe 内滚动
+      var win = epubFrame.contentWindow;
+      if (win) {
+        win.addEventListener('scroll', function () {
+          if (epubScrollTimer) return;
+          epubScrollTimer = setTimeout(function () {
+            epubScrollTimer = null;
+            updateEpubPos();
+          }, 300);
+        }, { passive: true });
+      }
+    });
+    // 大文件解包要时间，超时放宽到 60 秒
+    setTimeout(function () { if (!loaded) showEpubError(); }, 60000);
+    epubFrame.src = '/api/epub/' + encodeURIComponent(bookId) + '/';
   }
+
+  function updateEpubPos() {
+    var doc = null;
+    try { doc = epubFrame.contentDocument; } catch (e) { return; }
+    if (!doc) return;
+    var el = doc.scrollingElement || doc.documentElement;
+    var max = el.scrollHeight - el.clientHeight;
+    var frac = max > 0 ? (el.scrollTop / max) : 0;
+    frac = Math.max(0, Math.min(1, frac));
+    setPos('已读 ' + Math.round(frac * 100) + '%');
+    scheduleSave(frac, 1);
+  }
+
+  function showEpubError() {
+    loadingEl.classList.add('hidden');
+    epubFrame.classList.add('hidden');
+    showError('这本 EPUB 打不开（文件可能已损坏，或解包失败）');
+    setPos('—');
+  }
+
+  function epubScrollBy(fracScreens) {
+    if (!epubFrame) return;
+    try {
+      var doc = epubFrame.contentDocument;
+      if (!doc) return;
+      var el = doc.scrollingElement || doc.documentElement;
+      el.scrollTop += fracScreens * el.clientHeight;
+      updateEpubPos();
+    } catch (e) { /* 忽略 */ }
+  }
+
 
   /* ================= TXT ================= */
   var txtPages = [];   // {start, text}
@@ -492,7 +571,7 @@
     if (!book) return;
     var fmt = (book.format || '').toLowerCase();
     if (fmt === 'pdf') { pdfCurrent = Math.max(1, pdfCurrent - 1); scrollToPdfPage(pdfCurrent, true); updatePdfPos(); scheduleSave(pdfCurrent, pdfTotal); }
-    else if (fmt === 'epub') { if (epubRendition) epubRendition.prev(); }
+    else if (fmt === 'epub') { epubScrollBy(-0.9); }
     else if (fmt === 'txt') { showTxtPage(txtCurrent - 1); }
     else if (fmt === 'azw3') { azw3ScrollBy(-0.9); }
   });
@@ -501,7 +580,7 @@
     if (!book) return;
     var fmt = (book.format || '').toLowerCase();
     if (fmt === 'pdf') { pdfCurrent = Math.min(pdfTotal, pdfCurrent + 1); scrollToPdfPage(pdfCurrent, true); updatePdfPos(); scheduleSave(pdfCurrent, pdfTotal); }
-    else if (fmt === 'epub') { if (epubRendition) epubRendition.next(); }
+    else if (fmt === 'epub') { epubScrollBy(0.9); }
     else if (fmt === 'txt') { showTxtPage(txtCurrent + 1); }
     else if (fmt === 'azw3') { azw3ScrollBy(0.9); }
   });
@@ -523,23 +602,19 @@
   function changeFont(delta) {
     if (!book) return;
     var fmt = (book.format || '').toLowerCase();
-    if (fmt === 'epub') {
-      epubFontPx = Math.max(12, Math.min(32, epubFontPx + delta));
-      if (epubRendition) epubRendition.themes.fontSize(epubFontPx + 'px');
-    } else if (fmt === 'txt' || fmt === 'azw3') {
-      if (fmt === 'txt') {
-        txtFontPx = Math.max(12, Math.min(32, txtFontPx + delta));
-        document.getElementById('txt-content').style.fontSize = txtFontPx + 'px';
-      } else {
-        // AZW3：改 iframe 内根字号
-        try {
-          var doc = azw3Frame.contentDocument;
-          if (doc && doc.documentElement) {
-            var cur = parseInt(doc.documentElement.style.fontSize || '18', 10) || 18;
-            doc.documentElement.style.fontSize = Math.max(12, Math.min(32, cur + delta)) + 'px';
-          }
-        } catch (e) { /* 跨域时忽略 */ }
-      }
+    if (fmt === 'epub' || fmt === 'azw3') {
+      // EPUB / AZW3：改 iframe 内根字号
+      var frame = fmt === 'epub' ? epubFrame : azw3Frame;
+      try {
+        var doc = frame && frame.contentDocument;
+        if (doc && doc.documentElement) {
+          var cur = parseInt(doc.documentElement.style.fontSize || '18', 10) || 18;
+          doc.documentElement.style.fontSize = Math.max(12, Math.min(32, cur + delta)) + 'px';
+        }
+      } catch (e) { /* 跨域时忽略 */ }
+    } else if (fmt === 'txt') {
+      txtFontPx = Math.max(12, Math.min(32, txtFontPx + delta));
+      document.getElementById('txt-content').style.fontSize = txtFontPx + 'px';
     }
   }
 
