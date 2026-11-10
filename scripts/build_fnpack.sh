@@ -14,5 +14,5 @@ find "$TMP" -name "*.pyc" -delete 2>/dev/null || true
 cd "$TMP"
 ~/workspace/fnpack build -d .
 mkdir -p "$ROOT/dist"
-cp "$TMP/$APP.fpk" "$ROOT/dist/manyue-reader-$VER-arm64.fpk"
-echo "wrote $ROOT/dist/manyue-reader-$VER-arm64.fpk"
+cp "$TMP/$APP.fpk" "$ROOT/dist/kele-reader-$VER-arm64.fpk"
+echo "wrote $ROOT/dist/kele-reader-$VER-arm64.fpk"
