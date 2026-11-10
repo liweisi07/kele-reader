@@ -1,4 +1,4 @@
-/* 满月阅读 — 阅读器：PDF / EPUB / TXT / AZW3 */
+/* 可乐阅读 — 阅读器：PDF / EPUB / TXT / AZW3 */
 (function () {
   'use strict';
 
@@ -40,7 +40,7 @@
   function setPos(text) { posLabel.textContent = text; }
   function setTitle(t) {
     titleEl.textContent = t;
-    document.title = t + ' — 满月阅读';
+    document.title = t + ' — 可乐阅读';
   }
 
   /* ---------- 进度保存（2 秒节流 + 页面隐藏时保存） ---------- */
@@ -97,7 +97,7 @@
   /* ---------- 入口：找书 + 恢复进度 ---------- */
   if (!bookId) {
     showError('没有指定要打开的书');
-    setTitle('满月阅读');
+    setTitle('可乐阅读');
   } else {
     apiFetch('/api/books')
       .then(function (r) { return r.json().catch(function () { return { books: [] }; }); })
@@ -180,6 +180,9 @@
   function afterPdfSized() {
     observePdfPages();
     updatePdfPos();
+    // 打开即记一次进度：哪怕只看第 1 页不翻页，这本书也会进历史；
+    // 之前只在滚动/点上一页下一页时才保存，纯翻页阅读以外的进度全丢了。
+    scheduleSave(pdfCurrent, pdfTotal);
     // 跳到恢复页
     requestAnimationFrame(function () { scrollToPdfPage(pdfCurrent, false); });
   }
@@ -253,29 +256,37 @@
     viewer.scrollTo({ top: top, behavior: smooth === false ? 'auto' : 'smooth' });
   }
 
-  // 滚动时判定最上方可见页（页按顺序排，第一个底部越过顶栏的就是）
-  var pdfScrollTimer = null;
-  viewer.addEventListener('scroll', function () {
+  // 滚动时判定最上方可见页（页按顺序排，第一个底部越过顶栏的就是）。
+  // 抽成共用函数：viewer 滚动和 window 滚动都走它——如果 .viewer 因
+  // 某些浏览器没成为滚动容器、实际是整页在滚，window 滚动也能兜底。
+  function detectPdfCurrentPage() {
     if (!pdfDoc) return;
+    var vRect = viewer.getBoundingClientRect();
+    var pages = document.querySelectorAll('.pdf-page');
+    for (var i = 0; i < pages.length; i++) {
+      var r = pages[i].getBoundingClientRect();
+      if (r.bottom > vRect.top + 60) {
+        var num = parseInt(pages[i].getAttribute('data-page'), 10);
+        if (num !== pdfCurrent) {
+          pdfCurrent = num;
+          updatePdfPos();
+          scheduleSave(pdfCurrent, pdfTotal);
+        }
+        break;
+      }
+    }
+  }
+
+  var pdfScrollTimer = null;
+  function onPdfScroll() {
     if (pdfScrollTimer) return;
     pdfScrollTimer = setTimeout(function () {
       pdfScrollTimer = null;
-      var vRect = viewer.getBoundingClientRect();
-      var pages = document.querySelectorAll('.pdf-page');
-      for (var i = 0; i < pages.length; i++) {
-        var r = pages[i].getBoundingClientRect();
-        if (r.bottom > vRect.top + 60) {
-          var num = parseInt(pages[i].getAttribute('data-page'), 10);
-          if (num !== pdfCurrent) {
-            pdfCurrent = num;
-            updatePdfPos();
-            scheduleSave(pdfCurrent, pdfTotal);
-          }
-          break;
-        }
-      }
+      detectPdfCurrentPage();
     }, 200);
-  });
+  }
+  viewer.addEventListener('scroll', onPdfScroll);
+  window.addEventListener('scroll', onPdfScroll, { passive: true });
 
   function rerenderPdfVisible() {
     pdfRendered = {};
