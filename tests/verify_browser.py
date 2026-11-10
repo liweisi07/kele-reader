@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Browser verification for manyue using a stock headless Chromium.
+"""Browser verification for kele using a stock headless Chromium.
 
 NOTE: the Chromium in this sandbox (/opt/meta-chromium/chrome) refuses
 to start without the Hatch WebGL domain policy (a signed policy file
@@ -23,7 +23,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURES = os.path.join(ROOT, "tests", "fixtures", "books")
 PORT = 18098
 BASE = "http://127.0.0.1:%d" % PORT
-DATA_DIR = "/tmp/manyue-browser-data"
+DATA_DIR = "/tmp/kele-browser-data"
 CHROME = "/opt/meta-chromium/chrome"
 
 CHECKS = []
@@ -47,8 +47,8 @@ def start_server():
               encoding="utf-8") as fh:
         json.dump({"book_folder": FIXTURES}, fh)
     env = dict(os.environ)
-    env["MANYUE_DATA_DIR"] = DATA_DIR
-    env["MANYUE_PORT"] = str(PORT)
+    env["KELE_DATA_DIR"] = DATA_DIR
+    env["KELE_PORT"] = str(PORT)
     proc = subprocess.Popen(
         [sys.executable, os.path.join(ROOT, "app", "app.py")],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
