@@ -190,9 +190,14 @@ def run_checks(proc):
     status, _h, data = http("/read")
     check("GET /read reader 200", status == 200
           and "book-title".encode("utf-8") in data, "(%d)" % status)
+    # 1.0.3: reader has prev/next chapter buttons (same folder, title order)
+    check("GET /read has chapter nav buttons", status == 200
+          and b"prev-chapter-btn" in data
+          and b"next-chapter-btn" in data
+          and b"chapter-label" in data, "(%d)" % status)
     status, _h, data = http("/api/version")
     check("GET /api/version", status == 200
-          and json.loads(data).get("version") == "1.0.2",
+          and json.loads(data).get("version") == "1.0.3",
           "(%d)" % status)
 
     # -- PWA -----------------------------------------------------------
