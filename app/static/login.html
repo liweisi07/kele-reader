@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101828">
+<link rel="stylesheet" href="/static/style.css">
+<title>登录 — 满月阅读</title>
+</head>
+<body>
+<header class="topbar"><h1>🌕 满月阅读</h1></header>
+<main class="page">
+  <div class="card" style="max-width:420px;margin:40px auto 0;">
+    <h2>登录</h2>
+    <p class="muted">首次登录默认账号 admin / 密码 admin，登录后请在设置里修改。</p>
+    <div id="login-error" class="error hidden"></div>
+    <div class="field">
+      <label for="login-user">账号</label>
+      <input type="text" id="login-user" autocomplete="username" placeholder="账号">
+    </div>
+    <div class="field">
+      <label for="login-pass">密码</label>
+      <input type="password" id="login-pass" autocomplete="current-password" placeholder="密码">
+    </div>
+    <button class="btn" id="login-btn" type="button" style="width:100%;">登录</button>
+  </div>
+</main>
+<script>
+(function () {
+  'use strict';
+  var userEl = document.getElementById('login-user');
+  var passEl = document.getElementById('login-pass');
+  var errEl = document.getElementById('login-error');
+  var btn = document.getElementById('login-btn');
+  function nextUrl() {
+    var m = /[?&]next=([^&]*)/.exec(location.search);
+    var nxt = m ? decodeURIComponent(m[1]) : '/';
+    if (nxt.charAt(0) !== '/') nxt = '/';
+    return nxt;
+  }
+  function doLogin() {
+    var username = userEl.value.trim();
+    var password = passEl.value;
+    if (!username || !password) {
+      errEl.textContent = '请输入账号和密码';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = '登录中…';
+    fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password })
+    })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: '服务器返回异常' }; }); })
+      .then(function (data) {
+        if (data.ok) {
+          location.href = nextUrl();
+        } else {
+          errEl.textContent = data.error || '登录失败';
+          errEl.classList.remove('hidden');
+          btn.disabled = false;
+          btn.textContent = '登录';
+        }
+      })
+      .catch(function () {
+        errEl.textContent = '登录失败，请检查网络';
+        errEl.classList.remove('hidden');
+        btn.disabled = false;
+        btn.textContent = '登录';
+      });
+  }
+  btn.addEventListener('click', doLogin);
+  passEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
+  userEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') passEl.focus(); });
+  userEl.focus();
+})();
+</script>
+</body>
+</html>
