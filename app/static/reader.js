@@ -144,7 +144,7 @@
     loadingEl.classList.add('hidden');
     if (fmt === 'pdf') initPdf();
     else if (fmt === 'txt') initTxt();
-    else if (fmt === 'azw3') initAzw3();
+    else if (fmt === 'azw3' || fmt === 'mobi') initAzw3();
     else showError('暂不支持这种格式');
   }
 
@@ -465,8 +465,14 @@
       .then(function (bytes) {
         var text = decodeBytes(bytes);
         txtTotalChars = text.length;
-        txtPages = paginateTxt(text);
+        // 先识章再分页：分页在章节标题前断开，章节从新页开始。
+        txtChapters = detectTxtChapters(text);
+        txtPages = paginateTxt(text, txtChapters);
         if (!txtPages.length) { showError('这本 TXT 是空的'); return; }
+        if (txtChapters.length) {
+          buildToc();
+          document.getElementById('toc-btn').classList.remove('hidden');
+        }
         var startPage = 0;
         if (typeof savedLoc === 'number' && savedLoc > 0) {
           for (var i = 0; i < txtPages.length; i++) {
@@ -475,6 +481,7 @@
         }
         showTxtPage(startPage, false);
         document.body.setAttribute('data-test-txt', String(txtPages.length));
+        document.body.setAttribute('data-test-txt-chapters', String(txtChapters.length));
         var slider = document.getElementById('txt-slider');
         slider.max = txtPages.length;
         document.getElementById('txt-slider-wrap').classList.remove('hidden');
@@ -530,7 +537,100 @@
     }
   }
 
-  function paginateTxt(text) {
+  /* ================= TXT 小说章节 ================= */
+  // 章节标题只认行首的短行（<=60 字），避免把正文里提到“第一章”
+  // 的段落误当成章节。常见写法：第X章/回/节/卷/部/篇（X 为阿拉伯
+  // 数字或中文数字）、Chapter N、序章/楔子/前言/引子/后记/尾声/番外。
+  var txtChapters = [];  // {title, offset}，offset 为全文字符下标
+  var TXT_CH_RE = /^第[0-9一二三四五六七八九十百千万两零〇]+[章节回节卷部篇集]/;
+  var TXT_EN_RE = /^Chapter\s*\d+/i;
+  var TXT_SPECIAL_RE = /^(序章|楔子|前言|引子|后记|尾声|番外)/;
+
+  function detectTxtChapters(text) {
+    var chapters = [];
+    var pos = 0;
+    var lines = text.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var raw = lines[i];
+      var line = raw.replace(/\r$/, '');
+      var trimmed = line.replace(/^\s+/, '').replace(/\s+$/, '');
+      if (trimmed.length > 0 && trimmed.length <= 60 &&
+          (TXT_CH_RE.test(trimmed) || TXT_EN_RE.test(trimmed) ||
+           TXT_SPECIAL_RE.test(trimmed))) {
+        chapters.push({ title: trimmed, offset: pos });
+      }
+      pos += raw.length + 1;
+    }
+    return chapters;
+  }
+
+  // 当前页属于哪一章（取 offset <= 页首的最后一章；没有章节返回 -1）
+  function currentTxtChapterIdx() {
+    if (!txtChapters.length || !txtPages.length) return -1;
+    var start = txtPages[txtCurrent].start;
+    var idx = -1;
+    for (var i = 0; i < txtChapters.length; i++) {
+      if (txtChapters[i].offset <= start) idx = i; else break;
+    }
+    return idx;
+  }
+
+  // 章节所在的页（取 start <= 章节 offset 的最后一页）
+  function txtPageForOffset(offset) {
+    var page = 0;
+    for (var i = 0; i < txtPages.length; i++) {
+      if (txtPages[i].start <= offset) page = i; else break;
+    }
+    return page;
+  }
+
+  function buildToc() {
+    var list = document.getElementById('toc-list');
+    list.innerHTML = '';
+    txtChapters.forEach(function (ch, i) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'toc-item';
+      b.textContent = ch.title;
+      b.setAttribute('data-chapter', String(i));
+      b.addEventListener('click', function () {
+        jumpToTxtChapter(i);
+        hideToc();
+      });
+      list.appendChild(b);
+    });
+    document.getElementById('toc-title').textContent =
+      '目录（' + txtChapters.length + ' 章）';
+  }
+
+  function jumpToTxtChapter(i) {
+    if (i < 0 || i >= txtChapters.length) return;
+    showTxtPage(txtPageForOffset(txtChapters[i].offset));
+  }
+
+  function highlightToc() {
+    var cur = currentTxtChapterIdx();
+    var items = document.querySelectorAll('#toc-list .toc-item');
+    for (var i = 0; i < items.length; i++) {
+      items[i].classList.toggle('current', i === cur);
+    }
+  }
+
+  function showToc() {
+    document.getElementById('toc-panel').classList.remove('hidden');
+    document.getElementById('toc-backdrop').classList.remove('hidden');
+    highlightToc();
+    // 当前章滚到可见位置
+    var cur = document.querySelector('#toc-list .toc-item.current');
+    if (cur) cur.scrollIntoView({ block: 'nearest' });
+  }
+
+  function hideToc() {
+    document.getElementById('toc-panel').classList.add('hidden');
+    document.getElementById('toc-backdrop').classList.add('hidden');
+  }
+
+  function paginateTxt(text, chapters) {
     var pages = [];
     var i = 0;
     while (i < text.length) {
@@ -539,6 +639,15 @@
         // 尽量在行边界断开
         var cut = text.lastIndexOf('\n', end);
         if (cut > i + 200) end = cut + 1;
+      }
+      // 章节处断页：章节标题落在页中时，在标题前断开，让章节从新页
+      // 开始，跳章才落得准、位置栏的章名才对。标题离页首太近（<200
+      // 字）时不另起页，标题本就在页首附近。
+      if (chapters) {
+        for (var j = 0; j < chapters.length; j++) {
+          var off = chapters[j].offset;
+          if (off > i + 200 && off < end) { end = off; break; }
+        }
       }
       pages.push({ start: i, text: text.slice(i, end) });
       i = end;
@@ -554,8 +663,15 @@
     content.textContent = txtPages[idx].text;
     var slider = document.getElementById('txt-slider');
     slider.value = idx + 1;
-    setPos('第 ' + (idx + 1) + ' / ' + txtPages.length + ' 页');
+    var chIdx = currentTxtChapterIdx();
+    var chTitle = chIdx >= 0 ? txtChapters[chIdx].title : '';
+    // 章标题太长只取前 12 字，避免把页码挤掉
+    if (chTitle.length > 12) chTitle = chTitle.slice(0, 12) + '…';
+    setPos(chTitle
+      ? (chTitle + ' · 第 ' + (idx + 1) + ' / ' + txtPages.length + ' 页')
+      : ('第 ' + (idx + 1) + ' / ' + txtPages.length + ' 页'));
     viewer.scrollTop = 0;
+    highlightToc();
     if (save !== false) scheduleSave(txtPages[idx].start, txtTotalChars);
   }
 
@@ -628,6 +744,10 @@
   }
 
   /* ================= 工具栏 ================= */
+  // TXT 小说章节目录：只有检测到章节时才显示目录按钮
+  document.getElementById('toc-btn').addEventListener('click', showToc);
+  document.getElementById('toc-close').addEventListener('click', hideToc);
+  document.getElementById('toc-backdrop').addEventListener('click', hideToc);
   // 上一章 / 下一章：跳到同文件夹的上一本/下一本（按书名顺序）。
   // 按钮置灰时 chapterPrev/Next 为 null，点它什么也不做。
   prevChapterBtn.addEventListener('click', function () {
@@ -643,7 +763,7 @@
     if (fmt === 'pdf') { pdfCurrent = Math.max(1, pdfCurrent - 1); scrollToPdfPage(pdfCurrent, true); updatePdfPos(); scheduleSave(pdfCurrent, pdfTotal); }
     else if (fmt === 'epub') { epubScrollBy(-0.9); }
     else if (fmt === 'txt') { showTxtPage(txtCurrent - 1); }
-    else if (fmt === 'azw3') { azw3ScrollBy(-0.9); }
+    else if (fmt === 'azw3' || fmt === 'mobi') { azw3ScrollBy(-0.9); }
   });
 
   nextBtn.addEventListener('click', function () {
@@ -652,7 +772,7 @@
     if (fmt === 'pdf') { pdfCurrent = Math.min(pdfTotal, pdfCurrent + 1); scrollToPdfPage(pdfCurrent, true); updatePdfPos(); scheduleSave(pdfCurrent, pdfTotal); }
     else if (fmt === 'epub') { epubScrollBy(0.9); }
     else if (fmt === 'txt') { showTxtPage(txtCurrent + 1); }
-    else if (fmt === 'azw3') { azw3ScrollBy(0.9); }
+    else if (fmt === 'azw3' || fmt === 'mobi') { azw3ScrollBy(0.9); }
   });
 
   function azw3ScrollBy(fracScreens) {
@@ -672,8 +792,8 @@
   function changeFont(delta) {
     if (!book) return;
     var fmt = (book.format || '').toLowerCase();
-    if (fmt === 'epub' || fmt === 'azw3') {
-      // EPUB / AZW3：改 iframe 内根字号
+    if (fmt === 'epub' || fmt === 'azw3' || fmt === 'mobi') {
+      // EPUB / AZW3 / MOBI：改 iframe 内根字号
       var frame = fmt === 'epub' ? epubFrame : azw3Frame;
       try {
         var doc = frame && frame.contentDocument;
