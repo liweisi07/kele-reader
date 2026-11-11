@@ -6,8 +6,8 @@ Checks (each printed PASS/FAIL):
   2. All required outer members exist.
   3. The manifest's checksum line equals the MD5 of the app.tgz
      member bytes (fnpack's mechanism; no manifest.checksum member).
-  4. manifest parses and declares appname / version / platform=arm /
-     service_port=18090.
+  4. manifest parses and declares appname / version / platform=<expected>
+     / service_port=18090 (expected platform from --platform, default arm).
   5. app.py VERSION matches the manifest version.
   6. Inner app.tgz members are the app/ contents (no app/ prefix) and
      include all app files.
@@ -16,6 +16,7 @@ Checks (each printed PASS/FAIL):
   9. Icons are RGBA PNGs (color type 6).
 """
 
+import argparse
 import hashlib
 import io
 import json
@@ -54,7 +55,14 @@ def check(label, ok, detail=""):
 
 
 def main():
-    path = sys.argv[1]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("path")
+    parser.add_argument("--platform", default="arm",
+                        choices=["arm", "x86"],
+                        help="expected manifest platform (default: arm)")
+    args = parser.parse_args()
+    path = args.path
+    platform = args.platform
     all_ok = True
     with open(path, "rb") as fh:
         outer_bytes = fh.read()
@@ -95,7 +103,7 @@ def main():
     )
     all_ok &= check(
         "manifest fields",
-        manifest.get("platform") == "arm"
+        manifest.get("platform") == platform
         and manifest.get("service_port") == "18090"
         and manifest.get("appname") == "kele"
         and manifest.get("source") == "thirdparty",
