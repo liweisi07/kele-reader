@@ -656,6 +656,40 @@ async function main() {
       check('chapter: no page JS errors (epub)', errors.length === 0, errors.slice(0, 2).join(' | '));
       dom.window.close();
     }
+    // 1.0.4 回归：点“下一章/上一章”必须真的触发跳转（location.href）。
+    // jsdom 不实现跨页导航，点按钮后会记一条 "Not implemented:
+    // navigation" 的 jsdomError；以这条错误出现为准，证明点击
+    // 走到了 goToChapter。只验 data-target 不够——1.0.3 在真机上
+    // 点了没反应，就是这条点击路径没被验到。
+    {
+      const txtGbk = books.find((b) => b.title === '测试文章-GBK');
+      const { dom, errors } = await loadPage(`${BASE}/read?book=${epub.id}`);
+      const doc = dom.window.document;
+      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '3/4', 30000, 'chapter click (epub)');
+      const before = errors.length;
+      const nextBtn = doc.getElementById('next-chapter-btn');
+      const prevBtn = doc.getElementById('prev-chapter-btn');
+      const navTarget = nextBtn.getAttribute('data-target') || '';
+      const prevTarget = prevBtn.getAttribute('data-target') || '';
+      nextBtn.click();
+      const navNext = await waitFor(
+        () => errors.slice(before).some((e) => /navigation/i.test(e)),
+        5000, 'chapter click next navigates');
+      check('chapter: click next triggers navigation', ready && navNext,
+        `(target ${navTarget.slice(0, 8)}, new errors: ${errors.slice(before).join(' | ').slice(0, 200)})`);
+      check('chapter: click next targets sample-book (AZW3)', navTarget === azw3.id, `(target ${navTarget.slice(0, 8)})`);
+      // 上一章：同一页再点一次（jsdom 不真跳转，页面还在同一本上，
+      // 所以 prev 的目标仍是上一本，可以接着验）。
+      const beforePrev = errors.length;
+      prevBtn.click();
+      const navPrev = await waitFor(
+        () => errors.slice(beforePrev).some((e) => /navigation/i.test(e)),
+        5000, 'chapter click prev navigates');
+      check('chapter: click prev triggers navigation', ready && navPrev,
+        `(target ${prevTarget.slice(0, 8)}, new errors: ${errors.slice(beforePrev).join(' | ').slice(0, 200)})`);
+      check('chapter: click prev targets 测试文章-GBK', prevTarget === txtGbk.id, `(target ${prevTarget.slice(0, 8)})`);
+      dom.window.close();
+    }
     // 小说/：TXT 是第 1/4 章 → 上一章置灰；AZW3 是第 4/4 章 → 下一章置灰
     {
       const { dom, errors } = await loadPage(`${BASE}/read?book=${txt.id}`);
