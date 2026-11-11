@@ -14,6 +14,8 @@ Checks (each printed PASS/FAIL):
   7. All Python files in app.tgz compile.
   8. All JSON files in the package parse.
   9. Icons are RGBA PNGs (color type 6).
+ 10. The outer LICENSE names the manifest's display_name / appname /
+     version (the installer shows it as the agreement text).
 """
 
 import argparse
@@ -191,6 +193,19 @@ def main():
             icon_ok = False
             print("  wrong PWA icon size %s: %s != %s" % (name, got, want))
     all_ok &= check("icons are RGBA PNGs (PWA icons exact size)", icon_ok)
+
+    # The installer shows the outer LICENSE as the agreement text, so it
+    # must name the current app and version. (1.0.0-1.0.3 shipped a
+    # stale "满月阅读 manyue 1.0.0" LICENSE because nothing checked it.)
+    license_text = blob.get("LICENSE", b"").decode("utf-8", "ignore")
+    all_ok &= check(
+        "LICENSE names current app and version",
+        manifest.get("display_name") in license_text
+        and manifest.get("appname") in license_text
+        and manifest.get("version") in license_text,
+        "(first line: %s)" % license_text.splitlines()[0]
+        if license_text.splitlines() else "(empty)",
+    )
     print("RESULT: %s" % ("ALL CHECKS PASSED" if all_ok else "FAILURES"))
     return 0 if all_ok else 1
 
