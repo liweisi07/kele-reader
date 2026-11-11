@@ -145,7 +145,7 @@
       if (typeof loc !== 'number' || typeof total !== 'number' || total <= 0) return null;
       return Math.max(0, Math.min(100, Math.round(loc / total * 100)));
     }
-    if (fmt === 'epub' || fmt === 'azw3') {
+    if (fmt === 'epub' || fmt === 'azw3' || fmt === 'mobi') {
       if (typeof loc !== 'number') return null;
       return Math.max(0, Math.min(100, Math.round(loc * 100)));
     }
@@ -162,7 +162,7 @@
     if (fmt === 'txt' && typeof loc === 'number') {
       return total ? ('已读 ' + Math.round(loc / total * 100) + '%') : '上次读到一半';
     }
-    if ((fmt === 'azw3' || fmt === 'epub') && typeof loc === 'number') {
+    if ((fmt === 'azw3' || fmt === 'mobi' || fmt === 'epub') && typeof loc === 'number') {
       return '已读 ' + Math.round(loc * 100) + '%';
     }
     if (fmt === 'epub') {
