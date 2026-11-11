@@ -235,9 +235,9 @@ def run_checks(proc):
     by_fmt = {}
     for book in books:
         by_fmt.setdefault(book["format"], []).append(book)
-    check("GET /api/books 6 books, 4 formats",
-          status == 200 and len(books) == 6
-          and sorted(by_fmt) == ["azw3", "epub", "pdf", "txt"],
+    check("GET /api/books 8 books, 5 formats",
+          status == 200 and len(books) == 8
+          and sorted(by_fmt) == ["azw3", "epub", "mobi", "pdf", "txt"],
           "(%d books: %s)" % (len(books), sorted(by_fmt)))
     big_pdf = [b for b in by_fmt.get("pdf", [])
                if b["title"] == "测试漫画-大文件"][0]
@@ -246,6 +246,11 @@ def run_checks(proc):
     epub = by_fmt["epub"][0]
     txt = by_fmt["txt"][0]
     azw3 = by_fmt["azw3"][0]
+    mobi = by_fmt["mobi"][0]
+    check("MOBI listed with format mobi",
+          mobi["title"] == "sample-book-mobi"
+          and mobi["format"] == "mobi",
+          "(%s)" % mobi)
     check("big PDF >20MB in listing",
           big_pdf["size"] > 20 * 1024 * 1024,
           "(%s)" % big_pdf["size_text"])
@@ -343,12 +348,12 @@ def run_checks(proc):
     # uploaded cover and progress stay) for remaining checks.
     proc3 = start_server(wipe=False)
     try:
-        run_checks_after_restart(proc3, big_pdf, epub, txt, azw3)
+        run_checks_after_restart(proc3, big_pdf, epub, txt, azw3, mobi)
     finally:
         stop_server(proc3)
 
 
-def run_checks_after_restart(proc, big_pdf, epub, txt, azw3):
+def run_checks_after_restart(proc, big_pdf, epub, txt, azw3, mobi):
     # -- settings / rescan ---------------------------------------------
     status, _h, data = http_json("/api/settings")
     check("GET /api/settings folder+readable",
@@ -364,8 +369,8 @@ def run_checks_after_restart(proc, big_pdf, epub, txt, azw3):
     check("bad settings did not overwrite folder",
           data.get("book_folder", "").endswith("books"))
     status, _h, data = http_json("/api/rescan", method="POST")
-    check("POST /api/rescan -> 6 books",
-          status == 200 and data.get("count") == 6, "(%s)" % data)
+    check("POST /api/rescan -> 8 books",
+          status == 200 and data.get("count") == 8, "(%s)" % data)
 
     # -- AZW3 (real sample) -------------------------------------------
     status, _h, data = http("/api/azw3/" + azw3["id"] + "/")
@@ -388,6 +393,17 @@ def run_checks_after_restart(proc, big_pdf, epub, txt, azw3):
           status in (400, 404), "(%d)" % status)
     status, _h, _d = http("/api/azw3/%s/res/" % azw3["id"])
     check("AZW3 res empty path -> 404", status == 404, "(%d)" % status)
+
+    # -- MOBI (1.0.5): same extraction pipeline as AZW3 ---------------
+    status, _h, data = http("/api/azw3/" + mobi["id"] + "/")
+    text = data.decode("utf-8", "ignore")
+    check("MOBI page -> 200, chapters + res URLs",
+          status == 200 and "Choosing the paper" in text
+          and "Folding the classic boat" in text
+          and ("/api/azw3/%s/res/" % mobi["id"]) in text,
+          "(%d, %d bytes)" % (status, len(data)))
+    check("MOBI page has no <script>",
+          "<script" not in text.lower())
 
     # -- EPUB (server-side extraction, 1.0.1) -------------------------
     status, _h, data = http("/api/epub/" + epub["id"] + "/")
