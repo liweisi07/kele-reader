@@ -1,5 +1,9 @@
 /* 可乐阅读 — Service Worker */
-var CACHE_NAME = 'kele-v1';
+ // 缓存名必须跟版本号走（kele-v<版本>）：1.0.3 的教训——缓存名一直
+ // 是 kele-v1，1.0.2 升 1.0.3 后浏览器仍用缓存的旧 reader.js（没有
+ // 章节导航代码），新页面上的“上一章/下一章”按钮就成了摆设。发版
+ // 改版本号时务必同步改这里；verify_fpk 会校验缓存名含当前版本。
+var CACHE_NAME = 'kele-v1.0.4';
 // 只预缓存公开静态资源；/ 与 /read 要登录，不预缓存（登录页
 // 不能缓存到 / 下面），页面一律走网络。
 var APP_SHELL = [
@@ -16,6 +20,9 @@ var APP_SHELL = [
 ];
 
 self.addEventListener('install', function (event) {
+  // 立即接管：不等旧页面全部关闭，新版本一装好就激活并清旧缓存，
+  // 否则升级后仍可能跑旧缓存的 JS。
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then(function (cache) {
       return cache.addAll(APP_SHELL);
@@ -25,12 +32,15 @@ self.addEventListener('install', function (event) {
 
 self.addEventListener('activate', function (event) {
   event.waitUntil(
-    caches.keys().then(function (keys) {
-      return Promise.all(keys.map(function (key) {
-        if (key !== CACHE_NAME) return caches.delete(key);
-        return undefined;
-      }));
-    }).catch(function () {})
+    Promise.all([
+      clients.claim(),
+      caches.keys().then(function (keys) {
+        return Promise.all(keys.map(function (key) {
+          if (key !== CACHE_NAME) return caches.delete(key);
+          return undefined;
+        }));
+      }),
+    ]).catch(function () {})
   );
 });
 
