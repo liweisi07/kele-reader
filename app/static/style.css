@@ -104,9 +104,18 @@ img { display: block; max-width: 100%; }
 .folder-group .folder-count { font-size: 13px; color: #888; font-weight: 400; white-space: nowrap; }
 .folder-group .grid { margin-top: 10px; }
 
-/* ---------- 阅读历史 ---------- */
+/* ---------- 阅读历史（可折叠，默认收起，和文件夹一致） ---------- */
 .history { background: #fff; border: 1px solid #e3ddcf; border-radius: 12px; padding: 12px 14px; margin-bottom: 16px; }
-.history h2 { font-size: 15px; margin: 0 0 8px; }
+.history summary {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 15px; font-weight: 600; cursor: pointer; list-style: none;
+  padding: 2px 0;
+}
+.history summary::-webkit-details-marker { display: none; }
+.history summary::before { content: '▾'; color: #999; font-size: 13px; }
+.history:not([open]) summary::before { content: '▸'; }
+.history .history-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history .history-count { font-size: 13px; color: #888; font-weight: 400; white-space: nowrap; }
 .history-item {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 2px; border-top: 1px solid #f0ece2; min-height: 44px;
