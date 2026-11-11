@@ -16,6 +16,9 @@ Checks (each printed PASS/FAIL):
   9. Icons are RGBA PNGs (color type 6).
  10. The outer LICENSE names the manifest's display_name / appname /
      version (the installer shows it as the agreement text).
+ 11. static/sw.js CACHE_NAME contains the manifest version (a stale
+     cache name makes the browser keep serving the old reader.js
+     after an upgrade, leaving new buttons dead).
 """
 
 import argparse
@@ -205,6 +208,21 @@ def main():
         and manifest.get("version") in license_text,
         "(first line: %s)" % license_text.splitlines()[0]
         if license_text.splitlines() else "(empty)",
+    )
+
+    # The Service Worker cache name must track the version. (1.0.3:
+    # CACHE_NAME stayed kele-v1 across the 1.0.2->1.0.3 upgrade, so the
+    # browser kept serving the cached 1.0.2 reader.js with no chapter
+    # nav code, and the new page's prev/next buttons were dead.)
+    sw_js = inner_blob.get("static/sw.js", b"").decode("utf-8", "ignore")
+    cache_m = re.search(r"CACHE_NAME\s*=\s*'([^']+)'", sw_js)
+    all_ok &= check(
+        "sw.js CACHE_NAME contains current version",
+        cache_m is not None
+        and manifest.get("version") in cache_m.group(1),
+        "(CACHE_NAME=%s, version=%s)" % (
+            cache_m.group(1) if cache_m else "?",
+            manifest.get("version")),
     )
     print("RESULT: %s" % ("ALL CHECKS PASSED" if all_ok else "FAILURES"))
     return 0 if all_ok else 1
