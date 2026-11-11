@@ -11,13 +11,25 @@ Tarballs are built deterministically (mtime/uid/gid zeroed, sorted
 member lists, no stray files) so rebuilds are byte-identical.
 The canonical build is scripts/build_fnpack.sh (official fnpack tool);
 this script is a pure-Python fallback producing the same layout.
+
+Usage: build_fpk.py [--platform arm|x86]  (default arm)
+The target platform is written into the staged manifest's platform=
+line and into the output filename (arm -> arm64, x86 -> x86_64).
+The app code is pure Python, so the inner app.tgz is identical for
+every platform; only the manifest platform line differs.
 """
 
+import argparse
+import gzip
 import hashlib
 import io
 import os
+import re
 import sys
 import tarfile
+
+# Manifest platform value -> filename arch suffix.
+PLATFORM_SUFFIX = {"arm": "arm64", "x86": "x86_64"}
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 ROOT = os.path.normpath(ROOT)
@@ -64,9 +76,12 @@ def build_tar(members):
 
     A None path emits a directory entry (arcname must end with "/").
     USTAR format: fnpack/Go tooling emits USTAR.
+    The gzip wrapper's mtime is zeroed (gzip.compress mtime=0) so
+    rebuilds are byte-identical; tarfile's "w:gz" mode would stamp
+    the current time into the gzip header instead.
     """
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz",
+    with tarfile.open(fileobj=buf, mode="w",
                       format=tarfile.USTAR_FORMAT) as tf:
         for arcname, fs_path, mode in members:
             if fs_path is None:
@@ -92,11 +107,15 @@ def build_tar(members):
             info.gname = ""
             info.mode = mode
             tf.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
+    return gzip.compress(buf.getvalue(), compresslevel=9, mtime=0)
 
 
 def collect_app_members():
-    """All files under app/ (sorted, no __pycache__ / *.pyc)."""
+    """All files under app/ (sorted, no __pycache__ / *.pyc), plus the
+    top-level config/privilege and config/resource: the official fnpack
+    tool duplicates those two files inside app.tgz (at config/...), so
+    the fallback must do the same or its app.tgz differs from the
+    canonical build."""
     app_root = os.path.join(ROOT, "app")
     members = []
     dirs_seen = set()
@@ -115,16 +134,30 @@ def collect_app_members():
             full = os.path.join(dirpath, filename)
             rel = os.path.relpath(full, app_root)
             members.append((rel, full, 0o644))
+    # Top-level config files, duplicated into app.tgz by fnpack.
+    members.append(("config/", None, 0o755))
+    for name in ("privilege", "resource"):
+        full = os.path.join(ROOT, "config", name)
+        members.append(("config/" + name, full, 0o644))
     members.sort(key=lambda m: m[0])
     return members
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--platform", default="arm",
+                        choices=sorted(PLATFORM_SUFFIX),
+                        help="target platform written into the manifest "
+                        "(default: arm)")
+    args = parser.parse_args()
+    platform = args.platform
+    suffix = PLATFORM_SUFFIX[platform]
+
     manifest = parse_manifest(os.path.join(ROOT, "manifest"))
     appname = manifest.get("appname", "kele")
     version = manifest.get("version", "1.0.0")
     print("appname=%s version=%s platform=%s"
-          % (appname, version, manifest.get("platform")))
+          % (appname, version, platform))
 
     # 1. Inner app.tgz (contents of app/, no app/ prefix).
     app_members = collect_app_members()
@@ -144,6 +177,10 @@ def main():
     with open(os.path.join(ROOT, "manifest"), "r",
               encoding="utf-8") as fh:
         manifest_text = fh.read().rstrip("\n") + "\n"
+    # Override the platform line for the target platform (the repo
+    # manifest keeps platform=arm as the default).
+    manifest_text = re.sub(r"(?m)^platform=.*$",
+                           "platform=%s" % platform, manifest_text)
     manifest_text += "checksum=%s\n" % checksum
     staged_manifest = os.path.join(stage, "manifest")
     with open(staged_manifest, "w", encoding="utf-8") as fh:
@@ -173,7 +210,7 @@ def main():
 
     out_dir = os.path.join(ROOT, "dist")
     os.makedirs(out_dir, exist_ok=True)
-    out_name = "kele-reader-%s-arm64.fpk" % version
+    out_name = "kele-reader-%s-%s.fpk" % (version, suffix)
     out_path = os.path.join(out_dir, out_name)
     fpk_bytes = build_tar(outer_members)
     with open(out_path, "wb") as fh:
