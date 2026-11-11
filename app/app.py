@@ -54,7 +54,7 @@ STATIC_DIR = os.path.join(APP_DIR, "static")
 sys.path.insert(0, VENDOR_DIR)
 sys.path.insert(0, APP_DIR)
 
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 APPNAME = "kele"
 DEFAULT_PORT = 18090
 SESSION_COOKIE = "kele_session"
