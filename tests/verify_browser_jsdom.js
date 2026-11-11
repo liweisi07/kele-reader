@@ -380,6 +380,12 @@ async function main() {
       check('shelf: history has 2 entries', histOk);
       const histSection = doc.getElementById('history-section');
       check('shelf: history section visible', histSection && !histSection.classList.contains('hidden'));
+      // 1.0.6：阅读历史可折叠，默认收起（和文件夹一致），点标题展开
+      check('shelf: history is a <details>', histSection && histSection.tagName === 'DETAILS');
+      check('shelf: history collapsed by default', histSection && !histSection.hasAttribute('open'));
+      check('shelf: history count shows 2 条', doc.getElementById('history-count').textContent === '2 条', `(${doc.getElementById('history-count').textContent})`);
+      histSection.querySelector('summary').click();
+      check('shelf: history opens on summary click', histSection.hasAttribute('open'));
       const histTitles = [...doc.querySelectorAll('.history-item .history-title')].map((el) => el.textContent);
       check('shelf: history newest first (EPUB)', histTitles[0] && histTitles[0].includes('测试小说'));
       check('shelf: history second is PDF', histTitles[1] && histTitles[1].includes('测试漫画-大文件'));
