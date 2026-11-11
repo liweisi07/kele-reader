@@ -328,6 +328,8 @@ async function main() {
     const epub = books.find((b) => b.format === 'epub');
     const txt = books.find((b) => b.title === '测试文章');
     const azw3 = books.find((b) => b.format === 'azw3');
+    const mobi = books.find((b) => b.format === 'mobi');
+    const txtCh = books.find((b) => b.title === '测试小说-章节');
 
     // ---- shelf -------------------------------------------------------
     // Seed progress for two books (different times) so the shelf shows
@@ -351,7 +353,7 @@ async function main() {
       const { dom, errors } = await loadPage(BASE + '/');
       const ok = await waitFor(() => dom.window.document.querySelectorAll('.book').length >= 6, 20000, 'shelf grid');
       const doc = dom.window.document;
-      check('shelf: 6 books rendered', ok, `(found ${doc.querySelectorAll('.book').length})`);
+      check('shelf: 8 books rendered', ok, `(found ${doc.querySelectorAll('.book').length})`);
       check('shelf: big PDF title present', doc.body.textContent.includes('测试漫画-大文件'));
       check('shelf: EPUB title present', doc.body.textContent.includes('测试小说：满月之下'));
       // folder grouping: 2 collapsible groups, 漫画 (2) and 小说 (4)
@@ -359,11 +361,11 @@ async function main() {
       check('shelf: 2 folder groups', groupsOk);
       const groupSummaries = [...doc.querySelectorAll('details.folder-group summary')].map((s) => s.textContent);
       check('shelf: group 漫画 has 2 books', groupSummaries.some((t) => t.includes('漫画') && t.includes('2')));
-      check('shelf: group 小说 has 4 books', groupSummaries.some((t) => t.includes('小说') && t.includes('4')));
+      check('shelf: group 小说 has 6 books', groupSummaries.some((t) => t.includes('小说') && t.includes('6')));
       const mangaGroup = [...doc.querySelectorAll('details.folder-group')].find((g) => g.querySelector('summary').textContent.includes('漫画'));
       const novelGroup = [...doc.querySelectorAll('details.folder-group')].find((g) => g.querySelector('summary').textContent.includes('小说'));
       check('shelf: 漫画 group has the 2 PDFs', mangaGroup && mangaGroup.querySelectorAll('.book').length === 2);
-      check('shelf: 小说 group has the 4 books', novelGroup && novelGroup.querySelectorAll('.book').length === 4);
+      check('shelf: 小说 group has the 6 books', novelGroup && novelGroup.querySelectorAll('.book').length === 6);
       check('shelf: no page JS errors', errors.length === 0, errors.slice(0, 2).join(' | '));
       // progress bars: wait for the progress render (after /api/progress)
       const progOk = await waitFor(() => doc.querySelectorAll('.book .prog').length >= 2, 20000, 'shelf progress');
@@ -409,16 +411,18 @@ async function main() {
         const g = [...doc.querySelectorAll('details.folder-group')].find((el) => el.querySelector('summary').textContent.includes(name));
         return g ? [...g.querySelectorAll('.book .meta .t')].map((el) => el.textContent) : [];
       };
-      // Title sort (localeCompare zh): 测试文章, 测试文章-GBK, 测试小说,
-      // sample-book. Size sort (largest first): 测试文章, 测试文章-GBK,
-      // sample-book, 测试小说 — differs in positions 3-4.
+      // Title sort (localeCompare zh): 测试文章, 测试文章-GBK,
+      // 测试小说-章节, 测试小说：满月之下 (EPUB 标题取自 OPF 元数据),
+      // sample-book, sample-book-mobi. Size sort (largest first):
+      // 测试文章, sample-book-mobi, 测试文章-GBK, sample-book,
+      // 测试小说-章节, 测试小说：满月之下.
       const titleOrder = titlesIn('小说');
       check('shelf: default sort (title) order in 小说',
-        titleOrder.join('|') === '测试文章|测试文章-GBK|测试小说：满月之下|sample-book',
+        titleOrder.join('|') === '测试文章|测试文章-GBK|测试小说-章节|测试小说：满月之下|sample-book|sample-book-mobi',
         `(${titleOrder.join('|')})`);
       sortSel.value = 'size';
       sortSel.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
-      const sizeOk = await waitFor(() => titlesIn('小说').join('|') === '测试文章|测试文章-GBK|sample-book|测试小说：满月之下', 5000, 'sort by size');
+      const sizeOk = await waitFor(() => titlesIn('小说').join('|') === '测试文章|sample-book-mobi|测试文章-GBK|sample-book|测试小说-章节|测试小说：满月之下', 5000, 'sort by size');
       check('shelf: sort by size reorders 小说', sizeOk, `(${titlesIn('小说').join('|')})`);
       check('shelf: sort by size keeps big PDF first in 漫画', titlesIn('漫画')[0] === '测试漫画-大文件', `(${titlesIn('漫画').join('|')})`);
       sortSel.value = 'title';
@@ -642,16 +646,18 @@ async function main() {
       check('chapter: no page JS errors (small pdf)', errors.length === 0, errors.slice(0, 2).join(' | '));
       dom.window.close();
     }
-    // 小说/：EPUB 是第 3/4 章（书名序：测试文章、测试文章-GBK、
-    // 测试小说、sample-book）→ 上下都指向邻书
+    // 小说/：EPUB 是第 4/6 章（书名序：测试文章、测试文章-GBK、
+    // 测试小说-章节、测试小说：满月之下、sample-book、sample-book-mobi；
+    // EPUB 标题取自 OPF 元数据“测试小说：满月之下”，排在“测试小说-章节”后）
+    // → 上下都指向邻书
     {
       const txtGbk = books.find((b) => b.title === '测试文章-GBK');
       const { dom, errors } = await loadPage(`${BASE}/read?book=${epub.id}`);
       const doc = dom.window.document;
-      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '3/4', 30000, 'chapter nav (epub)');
+      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '4/6', 30000, 'chapter nav (epub)');
       const s = chapterState(doc);
-      check('chapter: EPUB is 3/4 in 小说/', ready && s.marker === '3/4' && s.label.includes('第 3 / 4 章'), `(${s.label}|${s.marker})`);
-      check('chapter: EPUB prev -> 测试文章-GBK', !s.prevDisabled && s.prevTarget === txtGbk.id, `(target ${s.prevTarget.slice(0, 8)})`);
+      check('chapter: EPUB is 4/6 in 小说/', ready && s.marker === '4/6' && s.label.includes('第 4 / 6 章'), `(${s.label}|${s.marker})`);
+      check('chapter: EPUB prev -> 测试小说-章节', !s.prevDisabled && s.prevTarget === txtCh.id, `(target ${s.prevTarget.slice(0, 8)})`);
       check('chapter: EPUB next -> sample-book (AZW3)', !s.nextDisabled && s.nextTarget === azw3.id, `(target ${s.nextTarget.slice(0, 8)})`);
       check('chapter: no page JS errors (epub)', errors.length === 0, errors.slice(0, 2).join(' | '));
       dom.window.close();
@@ -665,7 +671,7 @@ async function main() {
       const txtGbk = books.find((b) => b.title === '测试文章-GBK');
       const { dom, errors } = await loadPage(`${BASE}/read?book=${epub.id}`);
       const doc = dom.window.document;
-      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '3/4', 30000, 'chapter click (epub)');
+      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '4/6', 30000, 'chapter click (epub)');
       const before = errors.length;
       const nextBtn = doc.getElementById('next-chapter-btn');
       const prevBtn = doc.getElementById('prev-chapter-btn');
@@ -687,16 +693,16 @@ async function main() {
         5000, 'chapter click prev navigates');
       check('chapter: click prev triggers navigation', ready && navPrev,
         `(target ${prevTarget.slice(0, 8)}, new errors: ${errors.slice(beforePrev).join(' | ').slice(0, 200)})`);
-      check('chapter: click prev targets 测试文章-GBK', prevTarget === txtGbk.id, `(target ${prevTarget.slice(0, 8)})`);
+      check('chapter: click prev targets 测试小说-章节', prevTarget === txtCh.id, `(target ${prevTarget.slice(0, 8)})`);
       dom.window.close();
     }
-    // 小说/：TXT 是第 1/4 章 → 上一章置灰；AZW3 是第 4/4 章 → 下一章置灰
+    // 小说/：TXT 是第 1/6 章 → 上一章置灰；AZW3 是第 5/6 章 → 下一章指向 MOBI
     {
       const { dom, errors } = await loadPage(`${BASE}/read?book=${txt.id}`);
       const doc = dom.window.document;
-      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '1/4', 30000, 'chapter nav (txt)');
+      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '1/6', 30000, 'chapter nav (txt)');
       const s = chapterState(doc);
-      check('chapter: TXT reader has chapter buttons', ready && s.marker === '1/4', `(${s.label}|${s.marker})`);
+      check('chapter: TXT reader has chapter buttons', ready && s.marker === '1/6', `(${s.label}|${s.marker})`);
       check('chapter: TXT first book prev disabled', s.prevDisabled);
       check('chapter: TXT first book next enabled', !s.nextDisabled);
       check('chapter: no page JS errors (txt)', errors.length === 0, errors.slice(0, 2).join(' | '));
@@ -705,12 +711,57 @@ async function main() {
     {
       const { dom, errors } = await loadPage(`${BASE}/read?book=${azw3.id}`);
       const doc = dom.window.document;
-      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '4/4', 30000, 'chapter nav (azw3)');
+      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '5/6', 30000, 'chapter nav (azw3)');
       const s = chapterState(doc);
-      check('chapter: AZW3 reader has chapter buttons', ready && s.marker === '4/4', `(${s.label}|${s.marker})`);
-      check('chapter: AZW3 last book next disabled', s.nextDisabled);
-      check('chapter: AZW3 last book prev enabled', !s.prevDisabled);
+      check('chapter: AZW3 reader has chapter buttons', ready && s.marker === '5/6', `(${s.label}|${s.marker})`);
+      check('chapter: AZW3 next -> MOBI', !s.nextDisabled && s.nextTarget === mobi.id, `(target ${s.nextTarget.slice(0, 8)})`);
+      check('chapter: AZW3 prev enabled', !s.prevDisabled);
       check('chapter: no page JS errors (azw3)', errors.length === 0, errors.slice(0, 2).join(' | '));
+      dom.window.close();
+    }
+    // ---- 1.0.5: MOBI 与 TXT 小说章节 ----------------------------------
+    // MOBI（sample-book-mobi）是第 6/6 章 → 上一章指向 AZW3，下一章置灰；
+    // 打开后应正常解包出内容（data-test-azw3）。
+    {
+      const { dom, errors } = await loadPage(`${BASE}/read?book=${mobi.id}`);
+      const doc = dom.window.document;
+      const ready = await waitFor(() => doc.body.getAttribute('data-test-chapter') === '6/6', 30000, 'mobi chapter nav');
+      const s = chapterState(doc);
+      check('mobi: MOBI is 6/6 in 小说/', ready && s.marker === '6/6' && s.label.includes('第 6 / 6 章'), `(${s.label}|${s.marker})`);
+      check('mobi: MOBI prev -> AZW3', !s.prevDisabled && s.prevTarget === azw3.id, `(target ${s.prevTarget.slice(0, 8)})`);
+      check('mobi: MOBI last book next disabled', s.nextDisabled);
+      const loaded = await waitFor(() => doc.body.getAttribute('data-test-azw3') === '1', 30000, 'mobi content loads');
+      check('mobi: MOBI content renders (data-test-azw3)', loaded);
+      check('mobi: no page JS errors', errors.length === 0, errors.slice(0, 2).join(' | '));
+      dom.window.close();
+    }
+    // TXT 小说章节：测试小说-章节.txt 有 6 章（序章/第一章/第二章/
+    // 第3章/Chapter 4/后记），目录按钮可见，点第 3 章应跳到对应页，
+    // 位置栏显示当前章名。
+    {
+      const { dom, errors } = await loadPage(`${BASE}/read?book=${txtCh.id}`);
+      const doc = dom.window.document;
+      const ready = await waitFor(() => doc.body.getAttribute('data-test-txt-chapters') === '6', 30000, 'txt chapters detected');
+      check('txt-toc: 6 chapters detected', ready, `(marker ${doc.body.getAttribute('data-test-txt-chapters')})`);
+      const tocBtn = doc.getElementById('toc-btn');
+      check('txt-toc: TOC button visible', ready && !tocBtn.classList.contains('hidden'));
+      const items = doc.querySelectorAll('#toc-list .toc-item');
+      check('txt-toc: TOC lists 6 chapters', items.length === 6, `(${items.length})`);
+      const titles = Array.from(items).map((el) => el.textContent);
+      check('txt-toc: chapter titles in order',
+        titles[0] === '序章' && titles[1] === '第一章 初入江湖' && titles[2] === '第二章 风起云涌' &&
+        titles[3] === '第3章 夜探敌营' && titles[4] === 'Chapter 4 The Return' && titles[5] === '后记',
+        `(${titles.join(' | ')})`);
+      // 打开目录面板并点第 3 章（第二章 风起云涌）
+      tocBtn.click();
+      const panelOpen = !doc.getElementById('toc-panel').classList.contains('hidden');
+      check('txt-toc: TOC panel opens', panelOpen);
+      const before = doc.getElementById('pos-label').textContent;
+      items[2].click();
+      const jumped = await waitFor(() => doc.getElementById('pos-label').textContent.includes('第二章'), 5000, 'txt toc jump');
+      check('txt-toc: click chapter jumps to it', jumped, `(pos ${doc.getElementById('pos-label').textContent} <- ${before})`);
+      check('txt-toc: panel closes after jump', doc.getElementById('toc-panel').classList.contains('hidden'));
+      check('txt-toc: no page JS errors', errors.length === 0, errors.slice(0, 2).join(' | '));
       dom.window.close();
     }
     // 跳转后恢复进度：给小 PDF 存第 2 页进度，再打开它（这就是
