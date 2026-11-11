@@ -196,9 +196,19 @@ def run_checks(proc):
           and b"next-chapter-btn" in data
           and b"chapter-label" in data, "(%d)" % status)
     status, _h, data = http("/api/version")
+    # 版本号从仓库 manifest 读，不写死，否则每次升版都要改测试。
+    expected_version = ""
+    try:
+        with open(os.path.join(ROOT, "manifest"), encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("version="):
+                    expected_version = line.split("=", 1)[1].strip()
+                    break
+    except OSError:
+        pass
     check("GET /api/version", status == 200
-          and json.loads(data).get("version") == "1.0.3",
-          "(%d)" % status)
+          and json.loads(data).get("version") == expected_version,
+          "(%d, want %s)" % (status, expected_version))
 
     # -- PWA -----------------------------------------------------------
     status, _h, data = http("/manifest.json")
