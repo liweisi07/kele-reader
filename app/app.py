@@ -54,19 +54,21 @@ STATIC_DIR = os.path.join(APP_DIR, "static")
 sys.path.insert(0, VENDOR_DIR)
 sys.path.insert(0, APP_DIR)
 
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 APPNAME = "kele"
 DEFAULT_PORT = 18090
 SESSION_COOKIE = "kele_session"
 SESSION_TTL = 30 * 24 * 3600  # 会话有效期 30 天
 DEFAULT_USERNAME = "admin"
 DEFAULT_PASSWORD = "admin"
-BOOK_EXTS = {".pdf": "pdf", ".epub": "epub", ".txt": "txt", ".azw3": "azw3"}
+BOOK_EXTS = {".pdf": "pdf", ".epub": "epub", ".txt": "txt",
+              ".azw3": "azw3", ".mobi": "mobi", ".azw": "mobi"}
 CONTENT_TYPES = {
     "pdf": "application/pdf",
     "epub": "application/epub+zip",
     "txt": "text/plain; charset=utf-8",
     "azw3": "application/vnd.amazon.mobi8-ebook",
+    "mobi": "application/x-mobipocket-ebook",
 }
 MAX_JSON_BODY = 64 * 1024
 MAX_COVER_BODY = 2 * 1024 * 1024
@@ -1495,7 +1497,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         book_id = parts[0]
         book = find_book(book_id)
-        if not book or book["format"] != "azw3":
+        if not book or book["format"] not in ("azw3", "mobi"):
             self.send_error(404, "AZW3 not found")
             return
         if len(parts) >= 2 and parts[1] == "res":
