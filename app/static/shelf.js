@@ -233,6 +233,8 @@
       return;
     }
     historySection.classList.remove('hidden');
+    document.getElementById('history-count').textContent =
+      shown.length + ' 条';
     historyList.innerHTML = shown.map(function (e) {
       var b = e.book, p = e.p;
       return '<a class="history-item" href="/read?book=' + encodeURIComponent(b.id) + '">' +
