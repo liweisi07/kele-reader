@@ -65,10 +65,18 @@ def scan():
 class TestScan(unittest.TestCase):
     def test_finds_all_books(self):
         books = scan()
-        self.assertEqual(len(books), 6)
+        self.assertEqual(len(books), 8)
         formats = sorted(b["format"] for b in books)
         self.assertEqual(formats,
-                         ["azw3", "epub", "pdf", "pdf", "txt", "txt"])
+                         ["azw3", "epub", "mobi", "pdf", "pdf",
+                          "txt", "txt", "txt"])
+
+    def test_mobi_listed(self):
+        books = scan()
+        mobi = [b for b in books if b["format"] == "mobi"]
+        self.assertEqual(len(mobi), 1)
+        self.assertEqual(mobi[0]["title"], "sample-book-mobi")
+        self.assertEqual(mobi[0]["folder"], "小说")
 
     def test_subfolders(self):
         books = scan()
@@ -228,6 +236,8 @@ class TestAzw3(unittest.TestCase):
         self.books = scan()
         self.azw3 = [b for b in self.books
                      if b["format"] == "azw3"][0]
+        self.mobi = [b for b in self.books
+                     if b["format"] == "mobi"][0]
 
     def test_extract_real_sample(self):
         meta = appmod.ensure_azw3(self.azw3)
@@ -250,6 +260,19 @@ class TestAzw3(unittest.TestCase):
         # Internal chapter link became an in-page anchor, not a res URL.
         self.assertNotIn("res/OEBPS/Text/part0001.xhtml", text)
         self.assertIn('href="#ch1"', text)
+
+    def test_extract_mobi_sample(self):
+        # MOBI 走同一条解包管线（mobi.extract + EPUB/HTML 分支）。
+        meta = appmod.ensure_azw3(self.mobi)
+        self.assertEqual(meta["kind"], "epub")
+        index = os.path.join(appmod.AZW3_DIR, self.mobi["id"],
+                             "index.html")
+        self.assertTrue(os.path.isfile(index))
+        with open(index, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("Choosing the paper", text)
+        self.assertIn("Folding the classic boat", text)
+        self.assertIn("/api/azw3/%s/res/" % self.mobi["id"], text)
 
     def test_extract_is_cached(self):
         first = appmod.ensure_azw3(self.azw3)
